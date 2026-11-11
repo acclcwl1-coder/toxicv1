@@ -692,7 +692,7 @@ saveConfigToFile()
 end
 end)
 end)
-local TK4_SCRIPT_URL = "https://raw.githubusercontent.com/acclcwl1-coder/mv/refs/heads/main/FK4%20RESPECT%20PVP%20GOOD.lua"
+local TK4_SCRIPT_URL = "https://raw.githubusercontent.com/acclcwl1-coder/toxicv1/refs/heads/main/FK4_RESPECT_PVPX1.lua"
 local TK4_queueOnTeleport = nil
 pcall(function()
 TK4_queueOnTeleport =
@@ -4785,7 +4785,7 @@ local persistLoader = [[
           repeat task.wait(0.2) until game:IsLoaded() or (tick() - startT > 15)
           -- FIX 4: Try hosted URL first (works when loaded via loadstring/HttpGet),
           -- then fall back to local file paths (works when loaded from file).
-          local hostedUrl = "https://raw.githubusercontent.com/acclcwl1-coder/mv/refs/heads/main/FK4%20RESPECT%20PVP%20GOOD.lua"
+          local hostedUrl = "https://raw.githubusercontent.com/acclcwl1-coder/toxicv1/refs/heads/main/FK4_RESPECT_PVPX1.lua"
           local ok = pcall(function()
             loadstring(game:HttpGet(hostedUrl))()
           end)
