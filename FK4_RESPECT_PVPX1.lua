@@ -1182,6 +1182,13 @@ local function getAimScreenCenter()
   local vp = (Camera and Camera.ViewportSize) or Vector2.new(1366, 768)
   return Vector2.new(vp.X / 2, vp.Y / 2)
 end
+local function getSafeTargetPart(char, fallbackPart)
+  if math.random(1, 100) <= 80 then
+    return char:FindFirstChild("Head") or char:FindFirstChild("HitboxHead") or char:FindFirstChild("HumanoidRootPart")
+  else
+    return char:FindFirstChild("UpperTorso") or char:FindFirstChild("LowerTorso") or char:FindFirstChild("HumanoidRootPart")
+  end
+end
 local function findSilentTarget()
 if not (Config.SilentAim or Config.CombatMaster) then return nil, nil end
 local mousePos = getAimScreenCenter()
@@ -1195,7 +1202,7 @@ local hum = char:FindFirstChildOfClass("Humanoid")
 if not hum or hum.Health <= 0 then return end
 if Config.SkipDeflect and isPlayerDeflecting(pseudoPlayer) then return end
 if Config.SkipImmune and isTargetImmune(pseudoPlayer) then return end
-local part = getTargetPart(char, is360 and "Head" or Config.HitPart)
+local part = is360 and getSafeTargetPart(char, Config.HitPart) or getTargetPart(char, Config.HitPart)
 if not part then return end
 local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
 local dist
@@ -1260,7 +1267,7 @@ if not targetPart or not targetPart.Parent then
 targetPart, targetPlayer = findSilentTarget()
 end
 if targetPart then
-local activeHitChance = Config.CombatMaster and 100 or Config.HitChance
+local activeHitChance = Config.CombatMaster and math.random(88, 93) or Config.HitChance
 local hitChanceOk = (activeHitChance >= 100) or (math.random(1, 100) <= activeHitChance)
 if hitChanceOk then
 local origin = args[1]
@@ -4183,18 +4190,23 @@ do
         end
       end
 
-      -- 3. Double Jump trick every 1 second until reaching max height
+      -- 3. Gentle Double Jump trick every 1 second until reaching max height
       if currentHeight < maxHeight - 2 then
         if now - _cmJumpCycleAt >= 1.0 then
           _cmJumpCycleAt = now
-          -- 1st jump impulse
+          -- 1st jump impulse (gentle hop = 24 studs/s)
           pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+          local hNudge = horizontalVel * 0.4
           hrp.AssemblyLinearVelocity = Vector3.new(
-            (v.X * 0.35) + horizontalVel.X,
-            42,
-            (v.Z * 0.35) + horizontalVel.Z
+            (v.X * 0.5) + hNudge.X,
+            24,
+            (v.Z * 0.5) + hNudge.Z
           )
-          -- 2nd jump impulse (smart double jump after 0.14s)
+          -- Trigger natural crouch/slide in air
+          if CrouchController and CrouchController.IsCrouched and not CrouchController.IsCrouched() then
+            pcall(CrouchController.Toggle)
+          end
+          -- 2nd jump impulse (gentle double jump after 0.14s = 26 studs/s)
           task.delay(0.14, function()
             local c2 = LP.Character
             local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
@@ -4202,37 +4214,29 @@ do
             if h2 and r2 and h2.Health > 0 and Config.CombatMaster and Config.CMFly then
               pcall(function() h2:ChangeState(Enum.HumanoidStateType.Jumping) end)
               local v2 = r2.AssemblyLinearVelocity
-              r2.AssemblyLinearVelocity = Vector3.new(v2.X, 44, v2.Z)
+              r2.AssemblyLinearVelocity = Vector3.new(v2.X, 26, v2.Z)
             end
           end)
-        else
-          -- Continuous horizontal chase & glide between double jumps!
-          if horizontalVel.Magnitude > 0 then
-            hrp.AssemblyLinearVelocity = Vector3.new(
-              horizontalVel.X,
-              v.Y,
-              horizontalVel.Z
-            )
-          end
         end
       else
-        -- Ceiling reached: hover & strafe without exceeding max height
+        -- Ceiling reached: smooth hover without exceeding max height
         local targetY = floorY + maxHeight
         local diff = origin.Y - targetY
 
-        if diff > 3 then
-          -- Slightly too high -> gently ease down, never harsh slam
+        if diff > 2.5 then
+          -- Gently ease down
           hrp.AssemblyLinearVelocity = Vector3.new(
-            (v.X * 0.3) + horizontalVel.X,
-            math.min(v.Y, -8),
-            (v.Z * 0.3) + horizontalVel.Z
+            v.X * 0.85,
+            math.min(v.Y, -4),
+            v.Z * 0.85
           )
-        elseif diff < -2 then
-          -- Dipped below ceiling -> mini double jump boost back up
-          if now - _cmJumpCycleAt >= 0.8 then
+        elseif diff < -2.5 then
+          -- Mini gentle double jump boost back up to ceiling
+          if now - _cmJumpCycleAt >= 0.9 then
             _cmJumpCycleAt = now
             pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-            hrp.AssemblyLinearVelocity = Vector3.new((v.X * 0.35) + horizontalVel.X, 26, (v.Z * 0.35) + horizontalVel.Z)
+            local hNudge = horizontalVel * 0.35
+            hrp.AssemblyLinearVelocity = Vector3.new((v.X * 0.5) + hNudge.X, 22, (v.Z * 0.5) + hNudge.Z)
             task.delay(0.12, function()
               local c2 = LP.Character
               local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
@@ -4240,16 +4244,16 @@ do
               if h2 and r2 and h2.Health > 0 and Config.CombatMaster and Config.CMFly then
                 pcall(function() h2:ChangeState(Enum.HumanoidStateType.Jumping) end)
                 local v2 = r2.AssemblyLinearVelocity
-                r2.AssemblyLinearVelocity = Vector3.new(v2.X, 26, v2.Z)
+                r2.AssemblyLinearVelocity = Vector3.new(v2.X, 22, v2.Z)
               end
             end)
           end
         else
-          -- Stable in hover band -> float & continuous strafe / chase
+          -- Stable in hover band -> float gently
           hrp.AssemblyLinearVelocity = Vector3.new(
-            (v.X * 0.3) + horizontalVel.X,
-            v.Y * 0.4,
-            (v.Z * 0.3) + horizontalVel.Z
+            v.X * 0.9,
+            v.Y * 0.5,
+            v.Z * 0.9
           )
         end
       end
