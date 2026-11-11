@@ -490,22 +490,17 @@ local function resetWeaponCooldown()
     end)
   end
 
-  -- full auto trigger: CM = always fire (no mouse gate), FullAuto = mouse held only
-  if Config.FullAuto or Config.CombatMaster then
+  -- CM smart fire: only shoot when enemy is in the open (no wall)
+  -- FullAuto: only shoot when mouse held (unchanged)
+  if Config.FullAuto and not Config.CombatMaster then
     pcall(function()
-      if Config.CombatMaster then
-        -- CM: fire unconditionally, no mouse check, no cursor-free check
-        if not (ClientState and ClientState.Reloading) then
-          if WeaponController.SetTrigger then pcall(WeaponController.SetTrigger, true) end
-        end
-      else
-        local down = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or State.FireHeld
-        if down and not (ClientState and ClientState.Reloading) and not CM.cursorFree() then
-          if WeaponController.SetTrigger then pcall(WeaponController.SetTrigger, true) end
-        end
+      local down = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or State.FireHeld
+      if down and not (ClientState and ClientState.Reloading) and not CM.cursorFree() then
+        if WeaponController.SetTrigger then pcall(WeaponController.SetTrigger, true) end
       end
     end)
   end
+  -- CM smart fire is handled in the weaponTick target-check block below
 end
 local function applyWeaponMods()
 if not WeaponData then return end
@@ -1246,10 +1241,12 @@ else
   dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
 end
 if dist <= shortest then
-if cmOn or not Config.WallCheck or isVisible(camPos, part.Position, char) then  -- CM always passes
-shortest   = dist
-bestPart   = part
-bestPlayer = pseudoPlayer
+-- ALWAYS check wall for CM: only target players in the open
+local inOpen = isVisible(camPos, part.Position, char)
+if inOpen and dist <= shortest then
+  shortest   = dist
+  bestPart   = part
+  bestPlayer = pseudoPlayer
 end
 end
 end
@@ -4532,7 +4529,21 @@ local nowS = os.clock()
 local scanInterval = Config.CombatMaster and 0.01 or 0.033  -- CM: 100Hz, else 30Hz
 if nowS - (State._scanT or 0) >= scanInterval then
 State._scanT = nowS
+-- CM SMART FIRE: fire only when findSilentTarget returns a visible target
 local okS, tPart, tPlr = pcall(findSilentTarget)
+if Config.CombatMaster and WeaponController and WeaponController.SetTrigger then
+  pcall(function()
+    if okS and tPart ~= nil then
+      -- Target in the open → shoot
+      if not (ClientState and ClientState.Reloading) then
+        WeaponController.SetTrigger(true)
+      end
+    else
+      -- No visible target (behind wall or no enemy) → stop shooting
+      WeaponController.SetTrigger(false)
+    end
+  end)
+end
 if okS then
 State.SilentTarget = tPart
 State.CachedTarget = tPlr
