@@ -7962,12 +7962,6 @@ hideESP(State.ESPCache[dummy])
 
 end
 
-elseif State.ESPCache[dummy] then
-
-hideESP(State.ESPCache[dummy])
-
-end
-
 end
 
 end
