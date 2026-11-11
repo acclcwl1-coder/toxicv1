@@ -108,7 +108,7 @@ Name    = "TK4",
 Full    = "THE KINGS FOUR",
 Motto   = "Unión · Respeto · Poder · Lealtad",
 LogoId  = "rbxassetid://102293188968456",
-Version = "God Edition v5.1 - Mobile ESP + CM2",
+Version = "God Edition v8 - InstantHit + AdaptiveHP",
 }
 local Config = {
 SilentAim          = true,
@@ -4437,12 +4437,100 @@ end)
 State._speedOverriding = true
 end))
 end
+-- ═══════════════════════════════════════════════════════════════
+-- INSTANT HIT SYSTEM (Combat Master only)
+-- Tracks which players are currently on-screen.
+-- The MOMENT a new player enters screen → fires instantly.
+-- This ensures the first bullet lands frame-1, never miss.
+-- ═══════════════════════════════════════════════════════════════
+do
+  local _ihVisible  = {}   -- [player] = true/false last frame
+  local _ihLastFire = {}   -- [player] = os.clock() of last instant hit
+  local IH_COOLDOWN = 0.4  -- seconds between instant hits on same target
+
+  regConn(RunService.Heartbeat:Connect(function()
+    if not Config.CombatMaster then
+      -- reset tracking when CM off so it's fresh when turned on
+      _ihVisible = {}
+      return
+    end
+
+    local now    = os.clock()
+    local camPos = Camera.CFrame.Position
+
+    for _, player in ipairs(Players:GetPlayers()) do
+      if player == LP then continue end
+      if Config.TeamCheck and isTeammate(player) then continue end
+      local char = player.Character
+      local hum  = char and char:FindFirstChildOfClass("Humanoid")
+      if not char or not hum or hum.Health <= 0 then
+        _ihVisible[player] = false
+        continue
+      end
+
+      -- is any part of this player visible on screen?
+      local wasVisible = _ihVisible[player] or false
+      local nowVisible = false
+      pcall(function()
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+          local sp, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+          nowVisible = onScreen and sp.Z > 0
+        end
+      end)
+      _ihVisible[player] = nowVisible
+
+      -- NEW: player just entered screen this frame
+      if nowVisible and not wasVisible then
+        local cd = _ihLastFire[player] or 0
+        if now - cd >= IH_COOLDOWN then
+          _ihLastFire[player] = now
+          -- Instantly lock and fire at this player
+          task.spawn(function()
+            pcall(function()
+              if not Config.CombatMaster then return end
+              -- get the best hit part for their current HP
+              local hitPart = "Head"
+              pcall(function()
+                local h = char:FindFirstChildOfClass("Humanoid")
+                if h then
+                  local maxHP = h.MaxHealth; if maxHP <= 0 then maxHP = 100 end
+                  local pct = (h.Health / maxHP) * 100
+                  if pct > 60 then hitPart = "Head"
+                  elseif pct > 30 then hitPart = "Torso"
+                  else hitPart = "ClosestNoHead" end
+                end
+              end)
+              local part = char:FindFirstChild(hitPart)
+                        or char:FindFirstChild("UpperTorso")
+                        or char:FindFirstChild("HumanoidRootPart")
+              if not part then return end
+
+              -- Override SilentTarget immediately → next hook call hits them
+              State.SilentTarget = part
+              State.CachedTarget = player
+
+              -- Force SetTrigger to fire right now (no waiting for mouse input)
+              if WeaponController and WeaponController.SetTrigger then
+                pcall(WeaponController.SetTrigger, true)
+                task.wait(0.05)
+                pcall(WeaponController.SetTrigger, true)
+              end
+            end)
+          end)
+        end
+      end
+    end
+  end))
+end
+
 local renderConn = regConn(RunService.RenderStepped:Connect(function(dt)
 pcall(function()
 if Config.GuiVisible then return end
 if Config.SilentAim or Config.CombatMaster then
 local nowS = os.clock()
-if nowS - (State._scanT or 0) >= 0.033 then      -- 30 Hz target scan
+local scanInterval = Config.CombatMaster and 0.01 or 0.033  -- CM: 100Hz, else 30Hz
+if nowS - (State._scanT or 0) >= scanInterval then
 State._scanT = nowS
 local okS, tPart, tPlr = pcall(findSilentTarget)
 if okS then
