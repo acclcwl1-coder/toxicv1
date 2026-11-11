@@ -1136,7 +1136,9 @@ local RaycastFilter = RaycastParams.new()
 RaycastFilter.FilterType = Enum.RaycastFilterType.Exclude
 RaycastFilter.IgnoreWater = true
 local function isVisible(fromPos, toPos, char)
-if not Config.WallCheck then return true end
+-- CM always wall-checks (never shoot through walls) regardless of WallCheck toggle.
+-- Non-CM: respects the toggle (original behaviour).
+if not Config.WallCheck and not Config.CombatMaster then return true end
 local excludeList = { Camera, LP.Character }
 if char then table.insert(excludeList, char) end
 RaycastFilter.FilterDescendantsInstances = excludeList
@@ -1207,77 +1209,89 @@ local function getCMAdaptiveHitPart(hum)
   local hpPct = (hum.Health / maxHP) * 100
 
   if hpPct > 60 then
-    return "Head"       -- healthy → headshot
+    return "Head"             -- HP > 60%  → headshot, kill fast
   elseif hpPct > 30 then
-    return "Torso"      -- mid HP → torso (wide, reliable)
+    return "ClosestNoHead"    -- HP 30-60% → closest part, NEVER head (arms/legs/torso)
   else
-    return "ClosestNoHead"  -- low HP → closest part EXCLUDING Head (Arms/Legs/Torso only)
+    return "Torso"            -- HP < 30%  → torso guaranteed finish
   end
 end
 
 local bestPart, bestPlayer = nil, nil
-local function considerChar(char, pseudoPlayer)
+local function considerChar(char, pseudoPlayer, preDist)
 if not char then return end
 local hum = char:FindFirstChildOfClass("Humanoid")
 if not hum or hum.Health <= 0 then return end
 if Config.SkipDeflect and isPlayerDeflecting(pseudoPlayer) then return end
 if Config.SkipImmune and isTargetImmune(pseudoPlayer) then return end
--- CM: use adaptive hit part based on enemy HP
--- Non-CM: use Config.HitPart as normal
+-- Pre-distance gate: skip enemies clearly further than current best (saves raycast on busy servers)
+if preDist and preDist > shortest * 1.15 and not cmOn then return end
+-- CM: use adaptive hit part based on enemy HP; Non-CM: Config.HitPart
 local hitPart = cmOn and getCMAdaptiveHitPart(hum) or Config.HitPart
 local part = getTargetPart(char, hitPart)
 if not part then return end
 local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
--- CM: scan all players regardless of on-screen, use world-space distance
 local dist
 if cmOn then
-  -- 360 mode: sort by world distance to camera, not screen distance
-  if screenPos.Z <= 0 then
-    dist = (Camera.CFrame.Position - part.Position).Magnitude
-  else
-    dist = (Camera.CFrame.Position - part.Position).Magnitude
-  end
+  -- 360 mode: world-space distance from camera
+  dist = (Camera.CFrame.Position - part.Position).Magnitude
 else
   if not onScreen or screenPos.Z <= 0 then return end
   dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
 end
-if dist <= shortest then
--- ALWAYS check wall for CM: only target players in the open
+if dist > shortest then return end
+-- Wall check (CM: always; non-CM: respects WallCheck toggle via isVisible)
 local inOpen = isVisible(camPos, part.Position, char)
-if inOpen and dist <= shortest then
+if inOpen then
   shortest   = dist
   bestPart   = part
   bestPlayer = pseudoPlayer
 end
 end
-end
-for _, player in ipairs(Players:GetPlayers()) do
-if player ~= LP and (not Config.TeamCheck or not isTeammate(player)) then
-considerChar(player.Character, player)
-end
-end
-local matchBotsFolder = workspace:FindFirstChild("MatchBots")
-if matchBotsFolder then
-for _, bot in ipairs(matchBotsFolder:GetChildren()) do
-local isEnemyBot = true
-if Config.TeamCheck and ClientState and ClientState.Match and ClientState.Match.Players then
-for _, entry in ipairs(ClientState.Match.Players) do
-if entry.Name == bot.Name and entry.Team and ClientState.Match.Team and entry.Team == ClientState.Match.Team then
-isEnemyBot = false
-break
-end
-end
-end
-if isEnemyBot then
-considerChar(bot, { Name = bot.Name, DisplayName = bot.Name, Character = bot, IsBot = true })
-end
-end
-end
-local targetsFolder = workspace:FindFirstChild("Targets")
-if targetsFolder then
-for _, dummy in ipairs(targetsFolder:GetChildren()) do
-considerChar(dummy, { Name = dummy.Name, DisplayName = dummy.Name, Character = dummy, IsBot = true })
-end
+
+-- Collect candidates, sort by 3D distance (closest first → fast exit on first visible hit)
+do
+  local candidates = {}
+  for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= LP and (not Config.TeamCheck or not isTeammate(player)) and player.Character then
+      local eHrp = player.Character:FindFirstChild("HumanoidRootPart")
+      local d = eHrp and (Camera.CFrame.Position - eHrp.Position).Magnitude or math.huge
+      candidates[#candidates + 1] = { char = player.Character, pseudo = player, d = d }
+    end
+  end
+  local matchBotsFolder = workspace:FindFirstChild("MatchBots")
+  if matchBotsFolder then
+    for _, bot in ipairs(matchBotsFolder:GetChildren()) do
+      local isEnemyBot = true
+      if Config.TeamCheck and ClientState and ClientState.Match and ClientState.Match.Players then
+        for _, entry in ipairs(ClientState.Match.Players) do
+          if entry.Name == bot.Name and entry.Team and ClientState.Match.Team and entry.Team == ClientState.Match.Team then
+            isEnemyBot = false; break
+          end
+        end
+      end
+      if isEnemyBot then
+        local eHrp = bot:FindFirstChild("HumanoidRootPart")
+        local d = eHrp and (Camera.CFrame.Position - eHrp.Position).Magnitude or math.huge
+        candidates[#candidates + 1] = { char = bot, pseudo = { Name = bot.Name, DisplayName = bot.Name, Character = bot, IsBot = true }, d = d }
+      end
+    end
+  end
+  local targetsFolder = workspace:FindFirstChild("Targets")
+  if targetsFolder then
+    for _, dummy in ipairs(targetsFolder:GetChildren()) do
+      local eHrp = dummy:FindFirstChild("HumanoidRootPart")
+      local d = eHrp and (Camera.CFrame.Position - eHrp.Position).Magnitude or math.huge
+      candidates[#candidates + 1] = { char = dummy, pseudo = { Name = dummy.Name, DisplayName = dummy.Name, Character = dummy, IsBot = true }, d = d }
+    end
+  end
+  -- Sort by 3D distance: closest enemy is checked first, raycast exits early
+  table.sort(candidates, function(a, b) return a.d < b.d end)
+  for _, c in ipairs(candidates) do
+    considerChar(c.char, c.pseudo, c.d)
+    -- Early exit for non-CM: once we have a close visible target, stop scanning
+    if bestPart and not cmOn and shortest < 60 then break end
+  end
 end
 return bestPart, bestPlayer
 end
@@ -4385,17 +4399,16 @@ do
   -- ── BODY ROTATE TO TARGET: velocity nudge toward enemy ──────────────────
   -- Instead of writing CFrame (which MovementController overrides every frame),
   -- we set Humanoid.WalkToPoint to the enemy position.
-  -- The game's own movement system then turns and walks toward them —
-  -- looks 100% natural, server sees normal locomotion, zero detection.
-  local _cmRotAt = 0
-  local _cmRotName = "TK4_CMBodyRot"
-  pcall(function() RunService:UnbindFromRenderStep(_cmRotName) end)
-  regConn(RunService.Heartbeat:Connect(function()
+  -- 360 ORBIT: character circles the enemy constantly using AssemblyLinearVelocity.
+  -- No CFrame write, no MoveTo stop — pure velocity = server sees normal movement.
+  -- The character always FACES the enemy while orbiting around them.
+  local _cmOrbitAngle = 0   -- current angle around enemy (radians)
+  local _cmOrbitAt    = 0
+  local _cmOrbitName  = "TK4_CMBodyRot"
+  pcall(function() RunService:UnbindFromRenderStep(_cmOrbitName) end)
+  regConn(RunService.Heartbeat:Connect(function(dt)
     if not Config.CombatMaster then return end
     if not Config.CMBodyRotate then return end
-    local now = os.clock()
-    if now - _cmRotAt < 0.1 then return end
-    _cmRotAt = now
     pcall(function()
       local char = LP.Character
       local hrp  = char and char:FindFirstChild("HumanoidRootPart")
@@ -4403,9 +4416,41 @@ do
       if not hrp or not hum or hum.Health <= 0 then return end
       local enemyHrp = getStrafeEnemy(hrp.Position)
       if not enemyHrp then return end
-      -- WalkToPoint makes the humanoid face + step toward target
-      -- It only rotates the character, camera is untouched
-      hum:MoveTo(enemyHrp.Position)
+
+      local myPos    = hrp.Position
+      local enemyPos = enemyHrp.Position
+      local dist2d   = Vector2.new(myPos.X - enemyPos.X, myPos.Z - enemyPos.Z).Magnitude
+
+      -- Advance orbit angle (full 360 every ~3 seconds)
+      _cmOrbitAngle = _cmOrbitAngle + dt * 2.1   -- rad/s, ~3s per circle
+
+      -- Desired orbit position around enemy at ~orbitRadius studs
+      local orbitRadius = math.clamp(dist2d, 18, 55)
+      local targetX = enemyPos.X + math.cos(_cmOrbitAngle) * orbitRadius
+      local targetZ = enemyPos.Z + math.sin(_cmOrbitAngle) * orbitRadius
+      local targetPos = Vector3.new(targetX, myPos.Y, targetZ)
+
+      -- Direction from current pos toward orbit target point
+      local moveDir = (targetPos - myPos)
+      local moveDist = moveDir.Magnitude
+      if moveDist < 0.1 then return end
+      local moveUnit = moveDir.Unit
+
+      -- Apply as velocity (not CFrame) — game movement system stays happy
+      local speed = math.clamp(moveDist * 6, 10, 32)
+      local curV  = hrp.AssemblyLinearVelocity
+      hrp.AssemblyLinearVelocity = Vector3.new(
+        moveUnit.X * speed,
+        curV.Y,              -- keep vertical (jump/fall) unchanged
+        moveUnit.Z * speed
+      )
+
+      -- Face the enemy (CFrame only YAW — no pitch/roll)
+      local flat = Vector3.new(enemyPos.X, myPos.Y, enemyPos.Z)
+      if (flat - myPos).Magnitude > 0.5 then
+        local faceCF = CFrame.lookAt(myPos, flat)
+        hrp.CFrame   = CFrame.new(myPos) * (faceCF - faceCF.Position)
+      end
     end)
   end))
 
@@ -4561,8 +4606,8 @@ do
                   local maxHP = h.MaxHealth; if maxHP <= 0 then maxHP = 100 end
                   local pct = (h.Health / maxHP) * 100
                   if pct > 60 then hitPart = "Head"
-                  elseif pct > 30 then hitPart = "Torso"
-                  else hitPart = "ClosestNoHead" end
+                  elseif pct > 30 then hitPart = "ClosestNoHead"
+                  else hitPart = "Torso" end
                 end
               end)
               local part = char:FindFirstChild(hitPart)
