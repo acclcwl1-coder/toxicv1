@@ -12,19 +12,6 @@ if not LP then
 repeat task.wait() until Players.LocalPlayer
 LP = Players.LocalPlayer
 end
-
--- ═══════════════════════════════════════════════════════════
---  DEDUPE GUARD: Prevent double-execution on respawn/autoexec
---  If TK4 is already running in this session, STOP immediately.
--- ═══════════════════════════════════════════════════════════
-do
-  local G = (typeof(getgenv) == "function" and getgenv()) or _G
-  if G.TK4_INSTANCE_ALIVE then
-    -- script is already running — don't load a second copy
-    return
-  end
-  G.TK4_INSTANCE_ALIVE = true
-end
 local Camera = Workspace.CurrentCamera
 Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
 Camera = Workspace.CurrentCamera
@@ -125,7 +112,6 @@ Version = "God Edition v5.1 - Mobile ESP + CM2",
 }
 local Config = {
 SilentAim          = true,
-Silent360          = true,   -- 360° Infinite Target (No FOV limit, targets all around)
 HitPart            = "Head",
 HitChance          = 100,
 FOVRadius          = 200,
@@ -184,18 +170,12 @@ RapidFire          = false,
 RapidMultiplier    = 2.0,
 FullAuto           = false,
 CombatMaster       = false,   -- Master God Mode Combo
-CMFly              = true,    -- CM: Auto Double Jump Fly
-CMFlyHeight        = 35,      -- CM: Height limit above floor (studs)
-CMStrafe           = true,    -- CM: Enemy-relative Left/Right Strafe
-CMChase            = true,    -- CM: Auto chase toward enemy
-CMChaseDistance    = 50,      -- CM: Ideal orbit distance (studs)
-CMOrbit            = true,    -- CM: Smart orbital movement around enemy
 AutoReload         = false,   -- Auto Spam Recharge on empty
 InfiniteAmmo       = false,   -- Smart Adaptive Infinite Ammo (Never exceeds legal gun mag)
 InfiniteStamina    = false,
 SpeedBoost         = false,
 SpeedBoostValue    = 40,
-AutoSprint         = true,   
+AutoSprint         = false, 
 HumanoidSwap       = false,
 InfiniteJump       = false,
 NoJumpDelay        = false,
@@ -287,30 +267,10 @@ if GameSettings then
 makeWritable(GameSettings)
 if GameSettings.Roll then makeWritable(GameSettings.Roll) end
 if GameSettings.Stamina then makeWritable(GameSettings.Stamina) end
-if GameSettings.Jump then
-  makeWritable(GameSettings.Jump)
-  State.OriginalJump = {
-    Cooldown    = GameSettings.Jump.Cooldown or 0.3,
-    CameraDip   = GameSettings.Jump.CameraDip or 0.6,
-    HardLanding = GameSettings.Jump.HardLanding or 60,
-  }
-end
+if GameSettings.Jump then makeWritable(GameSettings.Jump) end
 State.OriginalWalkSpeed = GameSettings.WalkSpeed or 18
 end
 end)
-function State.restoreJumpSettings()
-  pcall(function()
-    if GameSettings and GameSettings.Jump and State.OriginalJump then
-      GameSettings.Jump.Cooldown    = State.OriginalJump.Cooldown
-      GameSettings.Jump.CameraDip   = State.OriginalJump.CameraDip
-      GameSettings.Jump.HardLanding = State.OriginalJump.HardLanding
-    end
-    if ClientState then
-      ClientState.JumpReadyAt = 0
-      ClientState.LandDrop = 0
-    end
-  end)
-end
 pcall(function()
 WeaponData = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"):WaitForChild("WeaponData"))
 makeWritable(WeaponData)
@@ -615,12 +575,6 @@ local function setCombatMaster(enabled)
   pcall(applyWeaponMods)
   pcall(resetWeaponCooldown)
   State.CM.clearReloading()
-  if not enabled then
-    if State.restoreJumpSettings then State.restoreJumpSettings() end
-    if State.CM and State.CM.fly then
-      State.CM.fly.active = false
-    end
-  end
   if State.CM.onToggle then pcall(State.CM.onToggle, enabled) end
 end
 local function applyLighting()
@@ -990,17 +944,43 @@ local TK4_Q_CODE = [[
       -- No vote UI found (casual match or timeout) — arrived directly in arena
       task.wait(2)
     end
-    -- ONLY LOAD FROM HOSTED GITHUB URL:
-    local LOAD_URL = "https://raw.githubusercontent.com/acclcwl1-coder/toxicv1/refs/heads/main/FK4_RESPECT_PVPX1.lua"
-    local urlOk, urlErr = pcall(function()
-      loadstring(game:HttpGet(LOAD_URL, true))()
-    end)
-    if urlOk then
-      print("[TK4] Successfully loaded latest version from GitHub!")
-      return
-    else
-      warn("[TK4] URL load failed:", urlErr)
+    -- METHOD 1 (preferred): local files (clean copy — no Panda crash risk)
+    local paths = {
+      "TK4_RespectPVP_final_v10_mobile.lua",
+      "FK4 RESPECT PVP GOOD.lua",
+      "TK4/TK4_RespectPVP_final_v10_mobile.lua",
+      "tk4/TK4_RespectPVP_final_v10_mobile.lua",
+      "scripts/TK4_RespectPVP_final_v10_mobile.lua",
+      "autoexec/TK4_RespectPVP_final_v10_mobile.lua",
+      "TK4_cache.lua",
+    }
+    for _, p in ipairs(paths) do
+      if isfile and isfile(p) then
+        local fOk, fErr = pcall(function()
+          loadstring(readfile(p))()
+        end)
+        if fOk then
+          print("[TK4] Loaded from file: " .. p)
+          return
+        else
+          warn("[TK4] File load failed:", p, fErr)
+        end
+      end
     end
+    -- METHOD 2 (fallback): hosted URL
+    local LOAD_URL = "]] .. TK4_SCRIPT_URL .. [["
+    if LOAD_URL ~= "" then
+      local urlOk, urlErr = pcall(function()
+        loadstring(game:HttpGet(LOAD_URL, true))()
+      end)
+      if urlOk then
+        print("[TK4] Loaded from URL after teleport!")
+        return
+      else
+        warn("[TK4] URL load failed:", urlErr)
+      end
+    end
+    warn("[TK4] No source found after teleport! Place the file in the executor workspace.")
   ]]
 pcall(function()
 -- DEDUPE: only ONE OnTeleport listener allowed across all instances.
@@ -1025,6 +1005,19 @@ end
 end)
 end)
 print("[TK4] Persistent teleport queue ready (auto-load next match)")
+task.spawn(function()
+pcall(function()
+if writefile and isfile and game.HttpGet and TK4_SCRIPT_URL ~= "" then
+if not isfile("TK4_cache.lua") then
+local src = game:HttpGet(TK4_SCRIPT_URL, true)
+if src and #src > 1000 then
+writefile("TK4_cache.lua", src)
+print("[TK4] Auto-installed local fallback copy (TK4_cache.lua)")
+end
+end
+end
+end)
+end)
 else
 print("[TK4] No queue_on_teleport found — manual re-execute needed after teleport")
 end
@@ -1174,6 +1167,22 @@ if d < bestDist then best = p; bestDist = d end
 end
 end
 return best
+elseif hp == "ClosestNoHead" then
+-- Like Closest but NEVER picks Head — Arms/Legs/Torso only (used at HP < 30%)
+local camPos = Camera.CFrame.Position
+local best, bestDist = nil, math.huge
+for _, n in ipairs({
+  "UpperTorso", "LowerTorso", "HumanoidRootPart",
+  "LeftUpperArm", "RightUpperArm",
+  "LeftUpperLeg", "RightUpperLeg"
+}) do
+  local p = char:FindFirstChild(n)
+  if p then
+    local d = (p.Position - camPos).Magnitude
+    if d < bestDist then best = p; bestDist = d end
+  end
+end
+return best or char:FindFirstChild("HumanoidRootPart")
 else
 return char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
 end
@@ -1182,19 +1191,34 @@ local function getAimScreenCenter()
   local vp = (Camera and Camera.ViewportSize) or Vector2.new(1366, 768)
   return Vector2.new(vp.X / 2, vp.Y / 2)
 end
-local function getSafeTargetPart(char, fallbackPart)
-  if math.random(1, 100) <= 80 then
-    return char:FindFirstChild("Head") or char:FindFirstChild("HitboxHead") or char:FindFirstChild("HumanoidRootPart")
-  else
-    return char:FindFirstChild("UpperTorso") or char:FindFirstChild("LowerTorso") or char:FindFirstChild("HumanoidRootPart")
-  end
-end
 local function findSilentTarget()
 if not (Config.SilentAim or Config.CombatMaster) then return nil, nil end
 local mousePos = getAimScreenCenter()
 local camPos   = Camera.CFrame.Position
-local is360    = (Config.CombatMaster or Config.Silent360) and true or false
-local shortest = is360 and math.huge or Config.FOVRadius
+local shortest = Config.CombatMaster and math.huge or Config.FOVRadius
+local cmOn = Config.CombatMaster and true or false
+
+-- ── ADAPTIVE HIT PART (Combat Master only) ───────────────────────────────
+-- Reads enemy HP% and picks the best body part to hit:
+--   HP > 60%  → Head          (maximum damage, go for the kill fast)
+--   30-60%    → Torso/UpperTorso (wider hitbox, don't waste shots)
+--   < 30%     → Closest part  (guaranteed kill, any hit finishes them)
+-- Only active when CombatMaster = true. Falls back to Config.HitPart otherwise.
+local function getCMAdaptiveHitPart(hum)
+  if not hum then return Config.HitPart end
+  local maxHP = hum.MaxHealth
+  if not maxHP or maxHP <= 0 then maxHP = 100 end
+  local hpPct = (hum.Health / maxHP) * 100
+
+  if hpPct > 60 then
+    return "Head"       -- healthy → headshot
+  elseif hpPct > 30 then
+    return "Torso"      -- mid HP → torso (wide, reliable)
+  else
+    return "ClosestNoHead"  -- low HP → closest part EXCLUDING Head (Arms/Legs/Torso only)
+  end
+end
+
 local bestPart, bestPlayer = nil, nil
 local function considerChar(char, pseudoPlayer)
 if not char then return end
@@ -1202,19 +1226,27 @@ local hum = char:FindFirstChildOfClass("Humanoid")
 if not hum or hum.Health <= 0 then return end
 if Config.SkipDeflect and isPlayerDeflecting(pseudoPlayer) then return end
 if Config.SkipImmune and isTargetImmune(pseudoPlayer) then return end
-local part = is360 and getSafeTargetPart(char, Config.HitPart) or getTargetPart(char, Config.HitPart)
+-- CM: use adaptive hit part based on enemy HP
+-- Non-CM: use Config.HitPart as normal
+local hitPart = cmOn and getCMAdaptiveHitPart(hum) or Config.HitPart
+local part = getTargetPart(char, hitPart)
 if not part then return end
 local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+-- CM: scan all players regardless of on-screen, use world-space distance
 local dist
-if is360 then
-  -- True 360 mode: 3D world distance, targets behind/above/below regardless of FOV!
-  dist = (Camera.CFrame.Position - part.Position).Magnitude
+if cmOn then
+  -- 360 mode: sort by world distance to camera, not screen distance
+  if screenPos.Z <= 0 then
+    dist = (Camera.CFrame.Position - part.Position).Magnitude
+  else
+    dist = (Camera.CFrame.Position - part.Position).Magnitude
+  end
 else
   if not onScreen or screenPos.Z <= 0 then return end
   dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
 end
 if dist <= shortest then
-if is360 or not Config.WallCheck or isVisible(camPos, part.Position, char) then
+if cmOn or not Config.WallCheck or isVisible(camPos, part.Position, char) then  -- CM always passes
 shortest   = dist
 bestPart   = part
 bestPlayer = pseudoPlayer
@@ -1267,7 +1299,7 @@ if not targetPart or not targetPart.Parent then
 targetPart, targetPlayer = findSilentTarget()
 end
 if targetPart then
-local activeHitChance = Config.CombatMaster and math.random(88, 93) or Config.HitChance
+local activeHitChance = Config.CombatMaster and 100 or Config.HitChance
 local hitChanceOk = (activeHitChance >= 100) or (math.random(1, 100) <= activeHitChance)
 if hitChanceOk then
 local origin = args[1]
@@ -3554,15 +3586,9 @@ local aimFrame = makeMainTabFrame("AIM")
 local addSub   = makeSubSystem(aimFrame)
 local p0 = addSub("Combat Master")
 makeToggleRow(p0, "Combat Master (God Combo)", Config.CombatMaster, function(on) setCombatMaster(on) end, "CombatMaster")
-makeToggleRow(p0, "Auto Double-Jump Fly", Config.CMFly, function(on) Config.CMFly = on end, "CMFly")
-makeStepperRow(p0, "Fly Max Height", Config.CMFlyHeight, 15, 80, 5, function(n) Config.CMFlyHeight = n end, "CMFlyHeight")
-makeToggleRow(p0, "Enemy Target Strafe", Config.CMStrafe, function(on) Config.CMStrafe = on end, "CMStrafe")
-makeToggleRow(p0, "Auto Chase Enemy", Config.CMChase, function(on) Config.CMChase = on end, "CMChase")
-makeStepperRow(p0, "Orbit Distance", Config.CMChaseDistance, 20, 100, 5, function(n) Config.CMChaseDistance = n end, "CMChaseDistance")
 makeToggleRow(p0, "Auto Spam Recharge", Config.AutoReload, function(on) Config.AutoReload = on end, "AutoReload")
 local p1 = addSub("Silent Aim")
 makeToggleRow(p1, "Silent Aim", Config.SilentAim, function(on) Config.SilentAim = on end, "SilentAim")
-makeToggleRow(p1, "Silent 360° (Ignore FOV)", Config.Silent360, function(on) Config.Silent360 = on end, "Silent360")
 makeDropdownRow(p1, "Hit Part", {"Head","Neck","Torso","Closest"}, Config.HitPart, function(v) Config.HitPart = v end, "HitPart")
 makeStepperRow(p1, "Hit Chance (%)", Config.HitChance, 10, 100, 5, function(n) Config.HitChance = n end, "HitChance")
 makeStepperRow(p1, "Silent FOV Radius", Config.FOVRadius, 30, 500, 10, function(n) Config.FOVRadius = n; if FOVCircle then FOVCircle.Radius = n end end, "FOVRadius")
@@ -3847,50 +3873,85 @@ return
 end
 if gpe then return end  
 end)
--- SMOOTH INFINITE JUMP (independent toggle)
+-- DOUBLE JUMP (clean — no height check, resets on ground, max 1 air jump)
 do
-local lastJump, lastHold = 0, 0
+local lastJump   = 0
+local airJumps   = 0       -- how many air jumps used since last landing
+local MAX_AIR    = 1       -- 1 extra jump in the air (double jump)
+local onGround   = true    -- tracked via StateChanged
+
 local function jumpAllowed()
-if not Config.InfiniteJump then return false end
-if Config.GuiVisible then return false end
-if UserInputService:GetFocusedTextBox() then return false end
-return true
+  if not (Config.InfiniteJump or Config.CombatMaster) then return false end
+  if Config.GuiVisible then return false end
+  if UserInputService:GetFocusedTextBox() then return false end
+  return true
 end
-local function airJump()
-local now = os.clock()
-if now - lastJump < 0.12 then return end
-local char = LP.Character
-local hum = char and char:FindFirstChildOfClass("Humanoid")
-local hrp = char and char:FindFirstChild("HumanoidRootPart")
-if not hum or not hrp or hum.Health <= 0 or hum.Sit or hum.PlatformStand then return end
-lastJump = now
-pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-local power = 50
-pcall(function()
-if hum.UseJumpPower then power = hum.JumpPower else power = math.sqrt(2 * workspace.Gravity * hum.JumpHeight) end
-end)
-if type(power) ~= "number" or power < 40 then power = 50 end
-pcall(function()
-local v = hrp.AssemblyLinearVelocity
-if v.Y < power then hrp.AssemblyLinearVelocity = Vector3.new(v.X, power, v.Z) end
-end)
+
+-- Track grounded state via HumanoidStateType
+local function hookHumanoid(hum)
+  if not hum then return end
+  hum.StateChanged:Connect(function(_, new)
+    if new == Enum.HumanoidStateType.Landed
+    or new == Enum.HumanoidStateType.Running
+    or new == Enum.HumanoidStateType.RunningNoPhysics then
+      onGround  = true
+      airJumps  = 0
+    elseif new == Enum.HumanoidStateType.Freefall
+    or new == Enum.HumanoidStateType.Jumping then
+      onGround = false
+    end
+  end)
 end
+
+-- Hook current and future characters
+local function hookChar(char)
+  if not char then return end
+  local hum = char:FindFirstChildOfClass("Humanoid")
+        or char:WaitForChild("Humanoid", 5)
+  if hum then hookHumanoid(hum) end
+end
+if LP.Character then task.spawn(hookChar, LP.Character) end
+regConn(LP.CharacterAdded:Connect(function(c)
+  onGround = true; airJumps = 0
+  task.spawn(hookChar, c)
+end))
+
+local function doJump()
+  local now = os.clock()
+  if now - lastJump < 0.12 then return end
+  local char = LP.Character
+  local hum  = char and char:FindFirstChildOfClass("Humanoid")
+  local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+  if not hum or not hrp or hum.Health <= 0 or hum.Sit or hum.PlatformStand then return end
+
+  -- On ground: always jump (normal)
+  -- In air: allow only MAX_AIR extra jumps
+  if not onGround then
+    if airJumps >= MAX_AIR then return end
+    airJumps = airJumps + 1
+  end
+
+  lastJump = now
+  pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+  local power = 50
+  pcall(function()
+    if hum.UseJumpPower then
+      power = hum.JumpPower
+    else
+      power = math.sqrt(2 * workspace.Gravity * hum.JumpHeight)
+    end
+  end)
+  if type(power) ~= "number" or power < 40 then power = 50 end
+  pcall(function()
+    local v = hrp.AssemblyLinearVelocity
+    if v.Y < power then
+      hrp.AssemblyLinearVelocity = Vector3.new(v.X, power, v.Z)
+    end
+  end)
+end
+
 regConn(UserInputService.JumpRequest:Connect(function()
-if jumpAllowed() then airJump() end
-end))
-regConn(UserInputService.InputBegan:Connect(function(inp, gpe)
-if inp.UserInputType == Enum.UserInputType.Keyboard and inp.KeyCode == Enum.KeyCode.Space then
-if jumpAllowed() then airJump() end
-end
-end))
-regConn(RunService.Heartbeat:Connect(function()      -- hold Space = repeated hops
-if not Config.InfiniteJump then return end
-local now = os.clock()
-if now - lastHold < 0.35 then return end
-if jumpAllowed() and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-lastHold = now
-airJump()
-end
+  if jumpAllowed() then doJump() end
 end))
 end
 do
@@ -4080,10 +4141,68 @@ task.delay(1.5, function() if Config.CombatMaster then State.CM.reassert() end e
 --  when CM is OFF. Connections registered with regConn so they
 --  are cleaned up with the rest of the script.
 -- ═══════════════════════════════════════════════════════════
+
+-- ── FIX 3: AUTO REASSERT AFTER DEATH (4 seconds) ─────────────────────────
 do
-  -- ── AUTO FLY DOUBLE-JUMP & ENEMY STRAFE (1s cycle, 20-24m ceiling) ──
-  local _cmJumpCycleAt  = 0
-  local _cmStrafeSwapAt = 0
+  local function hookDeathForCM(char)
+    if not char then return end
+    local hum = char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    hum.Died:Connect(function()
+      if not Config.CombatMaster then return end
+      task.delay(4, function()
+        local newChar = LP.Character
+        if not newChar then return end
+        local newHum = newChar:FindFirstChildOfClass("Humanoid")
+        if not newHum or newHum.Health <= 0 then return end
+        pcall(State.CM.reassert)
+        task.delay(0.3, function() pcall(State.CM.reassert) end)
+      end)
+    end)
+  end
+  if LP.Character then task.spawn(hookDeathForCM, LP.Character) end
+  regConn(LP.CharacterAdded:Connect(function(c) task.spawn(hookDeathForCM, c) end))
+end
+
+do
+  -- ── UNDERGROUND RECOVERY ─────────────────────────────────────────────────
+  -- If player falls underground (Y below spawn floor by 50+ studs),
+  -- apply gentle upward push to bring them back. Never blocks normal movement.
+  local _ugRayParams = RaycastParams.new()
+  _ugRayParams.FilterType  = Enum.RaycastFilterType.Exclude
+  _ugRayParams.IgnoreWater = true
+  local _ugCheckAt = 0
+  regConn(RunService.Heartbeat:Connect(function()
+    if not Config.CombatMaster then return end
+    local now = os.clock()
+    if now - _ugCheckAt < 0.2 then return end
+    _ugCheckAt = now
+    pcall(function()
+      local char = LP.Character
+      local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+      local hum  = char and char:FindFirstChildOfClass("Humanoid")
+      if not hrp or not hum or hum.Health <= 0 then return end
+      -- Cast UPWARD to find ceiling/surface above us
+      _ugRayParams.FilterDescendantsInstances = { char }
+      local up = workspace:Raycast(hrp.Position, Vector3.new(0, 200, 0), _ugRayParams)
+      -- If surface is found above AND we have no floor below → underground
+      local down = workspace:Raycast(hrp.Position, Vector3.new(0, -5, 0), _ugRayParams)
+      if up and not down then
+        -- We are underground — push up gently
+        local v = hrp.AssemblyLinearVelocity
+        if v.Y < 20 then
+          hrp.AssemblyLinearVelocity = Vector3.new(v.X, 20, v.Z)
+        end
+      end
+    end)
+  end))
+
+  -- ── AUTO FLY-JUMP: hover + smart strafe toward nearest enemy ───────────
+  local CM_HOVER_HEIGHT = 6      -- studs above floor
+  local CM_BAND         = 2.5    -- tolerance ±2.5 studs
+  local CM_PULL_FORCE   = -28    -- downward Y when too high
+  local CM_JUMP_POWER   = 22     -- upward Y impulse when too low
+  local _cmJumpAt       = 0
   local _cmStrafeDir    = 1
 
   -- floor raycast params (reused every beat to avoid GC)
@@ -4091,172 +4210,80 @@ do
   _cmRayParams.FilterType = Enum.RaycastFilterType.Exclude
   _cmRayParams.IgnoreWater = true
 
-  local function getStrafeEnemy(myPos)
-    if State.SilentTarget and State.SilentTarget.Parent then
-      local hrp = State.SilentTarget.Parent:FindFirstChild("HumanoidRootPart")
-      local hum = State.SilentTarget.Parent:FindFirstChildOfClass("Humanoid")
-      if hrp and hum and hum.Health > 0 then return hrp end
-    end
-    if State.CachedTarget and State.CachedTarget:FindFirstChild("HumanoidRootPart") then
-      local hum = State.CachedTarget:FindFirstChildOfClass("Humanoid")
-      if hum and hum.Health > 0 then return State.CachedTarget.HumanoidRootPart end
-    end
-    local bestPart, bestDist = nil, 2000
-    for _, p in ipairs(Players:GetPlayers()) do
-      if p ~= LP and p.Character then
-        local eHum = p.Character:FindFirstChildOfClass("Humanoid")
-        local eHrp = p.Character:FindFirstChild("HumanoidRootPart")
-        if eHum and eHum.Health > 0 and eHrp then
-          local isTeammate = Config.TeamCheck and p.Team and LP.Team and p.Team == LP.Team
-          if not isTeammate then
-            local d = (eHrp.Position - myPos).Magnitude
-            if d < bestDist then
-              bestDist = d
-              bestPart = eHrp
-            end
-          end
+  -- FIX 2: nearest enemy for smart strafe direction
+  local function getNearestEnemyHRP(myHRP)
+    local best, bestDist = nil, math.huge
+    for _, pl in ipairs(Players:GetPlayers()) do
+      if pl ~= LP and not isTeammate(pl) then
+        local c   = pl.Character
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        if hrp and hum and hum.Health > 0 then
+          local d = (hrp.Position - myHRP.Position).Magnitude
+          if d < bestDist then bestDist = d; best = hrp end
         end
       end
     end
-    return bestPart
+    return best
   end
 
   regConn(RunService.Heartbeat:Connect(function()
     if not Config.CombatMaster then return end
-    if not Config.CMFly then return end
     local now = os.clock()
-    local char = LP.Character
-    local hum  = char and char:FindFirstChildOfClass("Humanoid")
-    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-    if not hum or not hrp or hum.Health <= 0 or hum.Sit then return end
-
+    if now - _cmJumpAt < 0.35 then return end
+    _cmJumpAt = now
     pcall(function()
-      -- 1. Measure height above floor
+      local char = LP.Character
+      local hum  = char and char:FindFirstChildOfClass("Humanoid")
+      local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+      if not hum or not hrp or hum.Health <= 0 or hum.Sit then return end
+
+      -- ── 1. Find floor Y via downward raycast ─────────────────────────
       _cmRayParams.FilterDescendantsInstances = { char }
       local origin = hrp.Position
-      local ray = workspace:Raycast(origin, Vector3.new(0, -250, 0), _cmRayParams)
+      local ray    = workspace:Raycast(origin, Vector3.new(0, -150, 0), _cmRayParams)
       local floorY = ray and (origin.Y - ray.Distance) or (origin.Y - 3.5)
-      local currentHeight = origin.Y - floorY
-      local maxHeight = Config.CMFlyHeight or 35
+
+      -- ── 2. Where are we relative to the target band ──────────────────
+      local targetY  = floorY + CM_HOVER_HEIGHT
+      local currentY = origin.Y
+      local diff     = currentY - targetY
 
       local v = hrp.AssemblyLinearVelocity
 
-      -- 2. Enemy-relative movement (Forward Chase + Orbit Strafe)
-      local horizontalVel = Vector3.zero
-      local enemyPart = getStrafeEnemy(origin)
+      if diff > CM_BAND then
+        -- TOO HIGH → push down
+        hrp.AssemblyLinearVelocity = Vector3.new(v.X, math.min(v.Y, CM_PULL_FORCE), v.Z)
 
-      if enemyPart then
-        local toEnemy = (enemyPart.Position - origin)
-        local dist2d = Vector2.new(toEnemy.X, toEnemy.Z).Magnitude
-        local flatForward = toEnemy.Magnitude > 1 and Vector3.new(toEnemy.X, 0, toEnemy.Z).Unit or Vector3.zero
-        local flatTangent = Vector3.new(-flatForward.Z, 0, flatForward.X)
+      elseif diff < -CM_BAND then
+        -- TOO LOW → jump impulse
+        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        hrp.AssemblyLinearVelocity = Vector3.new(v.X, CM_JUMP_POWER, v.Z)
 
-        -- Orbit Strafe (left / right)
-        local strafePart = Vector3.zero
-        if Config.CMStrafe then
-          if now - _cmStrafeSwapAt > 0.85 then
-            _cmStrafeSwapAt = now
-            _cmStrafeDir = -_cmStrafeDir
-          end
-          strafePart = flatTangent * (_cmStrafeDir * 20)
-        end
-
-        -- Forward / Backward Chase
-        local chasePart = Vector3.zero
-        if Config.CMChase and flatForward.Magnitude > 0 then
-          local desiredDist = Config.CMChaseDistance or 50
-          local distDiff = dist2d - desiredDist
-          if distDiff > 8 then
-            -- Far away: chase forward towards enemy!
-            local speed = math.clamp(distDiff * 0.6, 15, 32)
-            chasePart = flatForward * speed
-          elseif distDiff < -12 then
-            -- Too close: back up smoothly to keep ideal distance!
-            chasePart = -flatForward * 14
+        -- FIX 2: strafe perpendicular to nearest enemy, fallback camera right
+        local strafeVec
+        local enemyHRP = getNearestEnemyHRP(hrp)
+        if enemyHRP then
+          local flat = Vector3.new(
+            enemyHRP.Position.X - origin.X, 0,
+            enemyHRP.Position.Z - origin.Z)
+          if flat.Magnitude > 0.1 then
+            local fwd   = flat.Unit
+            local right = Vector3.new(fwd.Z, 0, -fwd.X)
+            strafeVec   = right * (_cmStrafeDir * 10)
           end
         end
+        if not strafeVec then
+          strafeVec = Camera.CFrame.RightVector * (_cmStrafeDir * 10)
+        end
+        _cmStrafeDir = -_cmStrafeDir
+        local v2 = hrp.AssemblyLinearVelocity
+        hrp.AssemblyLinearVelocity = Vector3.new(
+          v2.X + strafeVec.X, v2.Y, v2.Z + strafeVec.Z)
 
-        horizontalVel = strafePart + chasePart
       else
-        -- Fallback if no enemy: strafe with camera right vector
-        if Config.CMStrafe then
-          local rv = Camera.CFrame.RightVector
-          local strafeVec = Vector3.new(rv.X, 0, rv.Z).Unit
-          if now - _cmStrafeSwapAt > 0.85 then
-            _cmStrafeSwapAt = now
-            _cmStrafeDir = -_cmStrafeDir
-          end
-          horizontalVel = strafeVec * (_cmStrafeDir * 18)
-        end
-      end
-
-      -- 3. Double Jump Air Climb until reaching max height
-      if currentHeight < maxHeight - 2 then
-        if now - _cmJumpCycleAt >= 1.0 then
-          _cmJumpCycleAt = now
-          -- 1st jump impulse
-          pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-          local hNudge = horizontalVel * 0.5
-          hrp.AssemblyLinearVelocity = Vector3.new(
-            (v.X * 0.4) + hNudge.X,
-            36,
-            (v.Z * 0.4) + hNudge.Z
-          )
-          -- 2nd jump impulse (smart double jump after 0.14s)
-          task.delay(0.14, function()
-            local c2 = LP.Character
-            local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
-            local r2 = c2 and c2:FindFirstChild("HumanoidRootPart")
-            if h2 and r2 and h2.Health > 0 and Config.CombatMaster and Config.CMFly then
-              pcall(function() h2:ChangeState(Enum.HumanoidStateType.Jumping) end)
-              local v2 = r2.AssemblyLinearVelocity
-              r2.AssemblyLinearVelocity = Vector3.new(v2.X, 38, v2.Z)
-            end
-          end)
-        else
-          -- Float / Glide between double jumps so you don't drop back to floor
-          if v.Y < -6 then
-            hrp.AssemblyLinearVelocity = Vector3.new(v.X, v.Y * 0.55, v.Z)
-          end
-        end
-      else
-        -- Ceiling reached: smooth hover without exceeding max height
-        local targetY = floorY + maxHeight
-        local diff = origin.Y - targetY
-
-        if diff > 2.5 then
-          -- Slightly above ceiling -> gently float down
-          hrp.AssemblyLinearVelocity = Vector3.new(
-            v.X * 0.85,
-            math.min(v.Y, -4),
-            v.Z * 0.85
-          )
-        elseif diff < -2.5 then
-          -- Dipped below ceiling -> mini double jump boost back up to ceiling
-          if now - _cmJumpCycleAt >= 0.85 then
-            _cmJumpCycleAt = now
-            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-            local hNudge = horizontalVel * 0.4
-            hrp.AssemblyLinearVelocity = Vector3.new((v.X * 0.4) + hNudge.X, 26, (v.Z * 0.4) + hNudge.Z)
-            task.delay(0.12, function()
-              local c2 = LP.Character
-              local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
-              local r2 = c2 and c2:FindFirstChild("HumanoidRootPart")
-              if h2 and r2 and h2.Health > 0 and Config.CombatMaster and Config.CMFly then
-                pcall(function() h2:ChangeState(Enum.HumanoidStateType.Jumping) end)
-                local v2 = r2.AssemblyLinearVelocity
-                r2.AssemblyLinearVelocity = Vector3.new(v2.X, 28, v2.Z)
-              end
-            end)
-          end
-        else
-          -- Stable in hover band -> float gently
-          hrp.AssemblyLinearVelocity = Vector3.new(
-            v.X * 0.9,
-            v.Y * 0.4,
-            v.Z * 0.9
-          )
-        end
+        -- INSIDE BAND → hover: damp vertical drift
+        hrp.AssemblyLinearVelocity = Vector3.new(v.X, v.Y * 0.4, v.Z)
       end
     end)
   end))
@@ -4466,21 +4493,25 @@ GameSettings.TurnSpeed = 14
 GameSettings.SprintTurnSpeed = 9
 end)
 end
-if Config.NoJumpDelay or Config.CombatMaster then
+-- Always kill landing lag (HardLanding freeze) regardless of NoJumpDelay toggle.
+-- HardLanding=999999 caused the freeze-on-land bug.
+-- NoJumpDelay additionally zeroes cooldown + cameradip.
 pcall(function()
-if GameSettings and GameSettings.Jump then
-GameSettings.Jump.Cooldown = 0
-GameSettings.Jump.CameraDip = 0
-GameSettings.Jump.HardLanding = 999999
-end
-ClientState.JumpReadyAt = 0
-ClientState.LandDrop = 0
+  if GameSettings and GameSettings.Jump then
+    GameSettings.Jump.HardLanding = 0   -- no freeze on land, ever
+    GameSettings.Jump.LandDrop    = 0
+    if Config.NoJumpDelay or Config.CombatMaster then
+      GameSettings.Jump.Cooldown   = 0
+      GameSettings.Jump.CameraDip  = 0
+    end
+  end
+  if ClientState then
+    ClientState.LandDrop = 0
+    if Config.NoJumpDelay or Config.CombatMaster then
+      ClientState.JumpReadyAt = 0
+    end
+  end
 end)
-State._jumpOverridden = true
-elseif State._jumpOverridden then
-State._jumpOverridden = false
-if State.restoreJumpSettings then State.restoreJumpSettings() end
-end
 if State.CM.wanted() then
 resetWeaponCooldown()
 end
@@ -4587,7 +4618,6 @@ GStore.TK4_RESPECT_CLEANUP = function()
 GStore.TK4_SCRIPT_ID = nil
 GStore.TK4_TP_LISTENER_ACTIVE = nil
 GStore.TK4_TP_QUEUED = nil
-GStore.TK4_INSTANCE_ALIVE = nil  -- allow re-execution after Destroy
 pcall(function()
 local CAS_cleanup = game:GetService("ContextActionService")
 CAS_cleanup:UnbindAction("TK4_CamSink")
@@ -4683,12 +4713,11 @@ if GameSettings.Roll then
 GameSettings.Roll.Distance = 1.2
 GameSettings.Roll.TimeScale = 1.7
 end
-if State and State.restoreJumpSettings then
-  State.restoreJumpSettings()
-elseif GameSettings and GameSettings.Jump then
-  GameSettings.Jump.Cooldown = 0.3
-  GameSettings.Jump.CameraDip = 0.6
-  GameSettings.Jump.HardLanding = 60
+if GameSettings.Jump then
+GameSettings.Jump.Cooldown = 0.3
+GameSettings.Jump.CameraDip = 0.6
+GameSettings.Jump.HardLanding = 0  -- keep 0 always — no landing freeze
+GameSettings.Jump.LandDrop = 0
 end
 GameSettings.CrouchSpeed = 12
 GameSettings.CrouchStrafeSpeed = 14
@@ -4839,6 +4868,44 @@ _gcAccum = 0
 pcall(collectgarbage, "step", 1)
 end
 end))
+pcall(function()
+local queueOnTeleport = (syn and syn.queue_on_teleport)
+or queue_on_teleport
+or (fluxus and fluxus.queue_on_teleport)
+or (getgenv and getgenv().queue_on_teleport)
+if type(queueOnTeleport) == "function" then
+regConn(LP.OnTeleport:Connect(function(teleState)
+local persistLoader = [[
+        task.spawn(function()
+          local startT = tick()
+          repeat task.wait(0.2) until game:IsLoaded() or (tick() - startT > 15)
+          -- FIX 4: Try hosted URL first (works when loaded via loadstring/HttpGet),
+          -- then fall back to local file paths (works when loaded from file).
+          local hostedUrl = "https://raw.githubusercontent.com/acclcwl1-coder/toxicv1/refs/heads/main/FK4_RESPECT_PVPX1.lua"
+          local ok = pcall(function()
+            loadstring(game:HttpGet(hostedUrl))()
+          end)
+          if ok then return end
+          -- Fallback: local file paths
+          local candidatePaths = {
+            "work now/TK4_RespectPVP_ work.lua",
+            "TK4_RespectPVP_ work.lua",
+            "CLAN/work now/TK4_RespectPVP_ work.lua",
+            "TK4_RespectPVP.lua",
+            "TK4_RespectPVP khdama.lua"
+          }
+          for _, p in ipairs(candidatePaths) do
+            if isfile and isfile(p) then
+              pcall(loadstring(readfile(p)))
+              return
+            end
+          end
+        end)
+      ]]
+pcall(queueOnTeleport, persistLoader)
+end))
+end
+end)
 print("[TK4] THE KINGS FOUR — Respect PVP God Edition v5 Loaded!")
 task.spawn(function()
 if not UserInputService.TouchEnabled then return end
