@@ -125,6 +125,7 @@ Version = "God Edition v5.1 - Mobile ESP + CM2",
 }
 local Config = {
 SilentAim          = true,
+Silent360          = true,   -- 360° Infinite Target (No FOV limit, targets all around)
 HitPart            = "Head",
 HitChance          = 100,
 FOVRadius          = 200,
@@ -990,43 +991,17 @@ local TK4_Q_CODE = [[
       -- No vote UI found (casual match or timeout) — arrived directly in arena
       task.wait(2)
     end
-    -- METHOD 1 (preferred): local files (clean copy — no Panda crash risk)
-    local paths = {
-      "TK4_RespectPVP_final_v10_mobile.lua",
-      "FK4 RESPECT PVP GOOD.lua",
-      "TK4/TK4_RespectPVP_final_v10_mobile.lua",
-      "tk4/TK4_RespectPVP_final_v10_mobile.lua",
-      "scripts/TK4_RespectPVP_final_v10_mobile.lua",
-      "autoexec/TK4_RespectPVP_final_v10_mobile.lua",
-      "TK4_cache.lua",
-    }
-    for _, p in ipairs(paths) do
-      if isfile and isfile(p) then
-        local fOk, fErr = pcall(function()
-          loadstring(readfile(p))()
-        end)
-        if fOk then
-          print("[TK4] Loaded from file: " .. p)
-          return
-        else
-          warn("[TK4] File load failed:", p, fErr)
-        end
-      end
+    -- ONLY LOAD FROM HOSTED GITHUB URL:
+    local LOAD_URL = "https://raw.githubusercontent.com/acclcwl1-coder/toxicv1/refs/heads/main/FK4_RESPECT_PVPX1.lua"
+    local urlOk, urlErr = pcall(function()
+      loadstring(game:HttpGet(LOAD_URL, true))()
+    end)
+    if urlOk then
+      print("[TK4] Successfully loaded latest version from GitHub!")
+      return
+    else
+      warn("[TK4] URL load failed:", urlErr)
     end
-    -- METHOD 2 (fallback): hosted URL
-    local LOAD_URL = "]] .. TK4_SCRIPT_URL .. [["
-    if LOAD_URL ~= "" then
-      local urlOk, urlErr = pcall(function()
-        loadstring(game:HttpGet(LOAD_URL, true))()
-      end)
-      if urlOk then
-        print("[TK4] Loaded from URL after teleport!")
-        return
-      else
-        warn("[TK4] URL load failed:", urlErr)
-      end
-    end
-    warn("[TK4] No source found after teleport! Place the file in the executor workspace.")
   ]]
 pcall(function()
 -- DEDUPE: only ONE OnTeleport listener allowed across all instances.
@@ -1051,19 +1026,6 @@ end
 end)
 end)
 print("[TK4] Persistent teleport queue ready (auto-load next match)")
-task.spawn(function()
-pcall(function()
-if writefile and isfile and game.HttpGet and TK4_SCRIPT_URL ~= "" then
-if not isfile("TK4_cache.lua") then
-local src = game:HttpGet(TK4_SCRIPT_URL, true)
-if src and #src > 1000 then
-writefile("TK4_cache.lua", src)
-print("[TK4] Auto-installed local fallback copy (TK4_cache.lua)")
-end
-end
-end
-end)
-end)
 else
 print("[TK4] No queue_on_teleport found — manual re-execute needed after teleport")
 end
@@ -1225,8 +1187,8 @@ local function findSilentTarget()
 if not (Config.SilentAim or Config.CombatMaster) then return nil, nil end
 local mousePos = getAimScreenCenter()
 local camPos   = Camera.CFrame.Position
-local shortest = Config.CombatMaster and math.huge or Config.FOVRadius
-local cmOn = Config.CombatMaster and true or false
+local is360    = (Config.CombatMaster or Config.Silent360) and true or false
+local shortest = is360 and math.huge or Config.FOVRadius
 local bestPart, bestPlayer = nil, nil
 local function considerChar(char, pseudoPlayer)
 if not char then return end
@@ -1234,24 +1196,19 @@ local hum = char:FindFirstChildOfClass("Humanoid")
 if not hum or hum.Health <= 0 then return end
 if Config.SkipDeflect and isPlayerDeflecting(pseudoPlayer) then return end
 if Config.SkipImmune and isTargetImmune(pseudoPlayer) then return end
-local part = getTargetPart(char, cmOn and "Head" or Config.HitPart)
+local part = getTargetPart(char, is360 and "Head" or Config.HitPart)
 if not part then return end
 local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
--- CM: scan all players regardless of on-screen, use world-space distance
 local dist
-if cmOn then
-  -- 360 mode: sort by world distance to camera, not screen distance
-  if screenPos.Z <= 0 then
-    dist = (Camera.CFrame.Position - part.Position).Magnitude
-  else
-    dist = (Camera.CFrame.Position - part.Position).Magnitude
-  end
+if is360 then
+  -- True 360 mode: 3D world distance, targets behind/above/below regardless of FOV!
+  dist = (Camera.CFrame.Position - part.Position).Magnitude
 else
   if not onScreen or screenPos.Z <= 0 then return end
   dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
 end
 if dist <= shortest then
-if cmOn or not Config.WallCheck or isVisible(camPos, part.Position, char) then  -- CM always passes
+if is360 or not Config.WallCheck or isVisible(camPos, part.Position, char) then
 shortest   = dist
 bestPart   = part
 bestPlayer = pseudoPlayer
@@ -3600,6 +3557,7 @@ makeToggleRow(p0, "Auto Camera to Target", Config.CMAutoCamera, function(on) Con
 makeToggleRow(p0, "Auto Spam Recharge", Config.AutoReload, function(on) Config.AutoReload = on end, "AutoReload")
 local p1 = addSub("Silent Aim")
 makeToggleRow(p1, "Silent Aim", Config.SilentAim, function(on) Config.SilentAim = on end, "SilentAim")
+makeToggleRow(p1, "Silent 360° (Ignore FOV)", Config.Silent360, function(on) Config.Silent360 = on end, "Silent360")
 makeDropdownRow(p1, "Hit Part", {"Head","Neck","Torso","Closest"}, Config.HitPart, function(v) Config.HitPart = v end, "HitPart")
 makeStepperRow(p1, "Hit Chance (%)", Config.HitChance, 10, 100, 5, function(n) Config.HitChance = n end, "HitChance")
 makeStepperRow(p1, "Silent FOV Radius", Config.FOVRadius, 30, 500, 10, function(n) Config.FOVRadius = n; if FOVCircle then FOVCircle.Radius = n end end, "FOVRadius")
@@ -4138,7 +4096,7 @@ do
       local hum = State.CachedTarget:FindFirstChildOfClass("Humanoid")
       if hum and hum.Health > 0 then return State.CachedTarget.HumanoidRootPart end
     end
-    local bestPart, bestDist = nil, 250
+    local bestPart, bestDist = nil, 2000
     for _, p in ipairs(Players:GetPlayers()) do
       if p ~= LP and p.Character then
         local eHum = p.Character:FindFirstChildOfClass("Humanoid")
@@ -4178,7 +4136,7 @@ do
 
       local v = hrp.AssemblyLinearVelocity
 
-      -- 2. Enemy-relative movement (Forward Chase + Orbit Strafe + Auto Camera)
+      -- 2. Enemy-relative movement (Forward Chase + Orbit Strafe)
       local horizontalVel = Vector3.zero
       local enemyPart = getStrafeEnemy(origin)
 
@@ -4187,18 +4145,6 @@ do
         local dist2d = Vector2.new(toEnemy.X, toEnemy.Z).Magnitude
         local flatForward = toEnemy.Magnitude > 1 and Vector3.new(toEnemy.X, 0, toEnemy.Z).Unit or Vector3.zero
         local flatTangent = Vector3.new(-flatForward.Z, 0, flatForward.X)
-
-        -- Auto Camera rotate if enemy is behind or outside direct view
-        if Config.CMAutoCamera and not Config.GuiVisible and Camera then
-          local camPos = Camera.CFrame.Position
-          local lookDir = Camera.CFrame.LookVector
-          local toEnemyCam = (enemyPart.Position - camPos).Unit
-          local dot = lookDir:Dot(toEnemyCam)
-          if dot < 0.65 then
-            local desiredCF = CFrame.lookAt(camPos, enemyPart.Position)
-            Camera.CFrame = Camera.CFrame:Lerp(desiredCF, 0.12)
-          end
-        end
 
         -- Orbit Strafe (left / right)
         local strafePart = Vector3.zero
@@ -4216,8 +4162,8 @@ do
           local desiredDist = Config.CMChaseDistance or 50
           local distDiff = dist2d - desiredDist
           if distDiff > 8 then
-            -- Far away: move forward towards enemy!
-            local speed = math.clamp(distDiff * 0.5, 12, 28)
+            -- Far away: chase forward towards enemy!
+            local speed = math.clamp(distDiff * 0.6, 15, 32)
             chasePart = flatForward * speed
           elseif distDiff < -12 then
             -- Too close: back up smoothly to keep ideal distance!
@@ -4261,6 +4207,15 @@ do
               r2.AssemblyLinearVelocity = Vector3.new(v2.X, 44, v2.Z)
             end
           end)
+        else
+          -- Continuous horizontal chase & glide between double jumps!
+          if horizontalVel.Magnitude > 0 then
+            hrp.AssemblyLinearVelocity = Vector3.new(
+              horizontalVel.X,
+              v.Y,
+              horizontalVel.Z
+            )
+          end
         end
       else
         -- Ceiling reached: hover & strafe without exceeding max height
@@ -4406,6 +4361,18 @@ local okS, tPart, tPlr = pcall(findSilentTarget)
 if okS then
 State.SilentTarget = tPart
 State.CachedTarget = tPlr
+if (Config.CMAutoCamera or (Config.CombatMaster and Config.CMChase)) and State.SilentTarget and not Config.GuiVisible and Camera then
+  local camPos = Camera.CFrame.Position
+  local targetPos = State.SilentTarget.Position
+  local toTarget = (targetPos - camPos).Unit
+  local lookDir = Camera.CFrame.LookVector
+  local dot = lookDir:Dot(toTarget)
+  if dot < 0.92 then
+    local desiredCF = CFrame.lookAt(camPos, targetPos)
+    local turnSpeed = math.clamp(dt * 14, 0.12, 0.45)
+    Camera.CFrame = Camera.CFrame:Lerp(desiredCF, turnSpeed)
+  end
+end
 end
 end
 else
@@ -4881,44 +4848,6 @@ _gcAccum = 0
 pcall(collectgarbage, "step", 1)
 end
 end))
-pcall(function()
-local queueOnTeleport = (syn and syn.queue_on_teleport)
-or queue_on_teleport
-or (fluxus and fluxus.queue_on_teleport)
-or (getgenv and getgenv().queue_on_teleport)
-if type(queueOnTeleport) == "function" then
-regConn(LP.OnTeleport:Connect(function(teleState)
-local persistLoader = [[
-        task.spawn(function()
-          local startT = tick()
-          repeat task.wait(0.2) until game:IsLoaded() or (tick() - startT > 15)
-          -- FIX 4: Try hosted URL first (works when loaded via loadstring/HttpGet),
-          -- then fall back to local file paths (works when loaded from file).
-          local hostedUrl = "https://raw.githubusercontent.com/acclcwl1-coder/toxicv1/refs/heads/main/FK4_RESPECT_PVPX1.lua"
-          local ok = pcall(function()
-            loadstring(game:HttpGet(hostedUrl))()
-          end)
-          if ok then return end
-          -- Fallback: local file paths
-          local candidatePaths = {
-            "work now/TK4_RespectPVP_ work.lua",
-            "TK4_RespectPVP_ work.lua",
-            "CLAN/work now/TK4_RespectPVP_ work.lua",
-            "TK4_RespectPVP.lua",
-            "TK4_RespectPVP khdama.lua"
-          }
-          for _, p in ipairs(candidatePaths) do
-            if isfile and isfile(p) then
-              pcall(loadstring(readfile(p)))
-              return
-            end
-          end
-        end)
-      ]]
-pcall(queueOnTeleport, persistLoader)
-end))
-end
-end)
 print("[TK4] THE KINGS FOUR — Respect PVP God Edition v5 Loaded!")
 task.spawn(function()
 if not UserInputService.TouchEnabled then return end
