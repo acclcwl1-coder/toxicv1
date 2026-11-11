@@ -4190,23 +4190,19 @@ do
         end
       end
 
-      -- 3. Gentle Double Jump trick every 1 second until reaching max height
+      -- 3. Double Jump Air Climb until reaching max height
       if currentHeight < maxHeight - 2 then
         if now - _cmJumpCycleAt >= 1.0 then
           _cmJumpCycleAt = now
-          -- 1st jump impulse (gentle hop = 24 studs/s)
+          -- 1st jump impulse
           pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-          local hNudge = horizontalVel * 0.4
+          local hNudge = horizontalVel * 0.5
           hrp.AssemblyLinearVelocity = Vector3.new(
-            (v.X * 0.5) + hNudge.X,
-            24,
-            (v.Z * 0.5) + hNudge.Z
+            (v.X * 0.4) + hNudge.X,
+            36,
+            (v.Z * 0.4) + hNudge.Z
           )
-          -- Trigger natural crouch/slide in air
-          if CrouchController and CrouchController.IsCrouched and not CrouchController.IsCrouched() then
-            pcall(CrouchController.Toggle)
-          end
-          -- 2nd jump impulse (gentle double jump after 0.14s = 26 studs/s)
+          -- 2nd jump impulse (smart double jump after 0.14s)
           task.delay(0.14, function()
             local c2 = LP.Character
             local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
@@ -4214,9 +4210,14 @@ do
             if h2 and r2 and h2.Health > 0 and Config.CombatMaster and Config.CMFly then
               pcall(function() h2:ChangeState(Enum.HumanoidStateType.Jumping) end)
               local v2 = r2.AssemblyLinearVelocity
-              r2.AssemblyLinearVelocity = Vector3.new(v2.X, 26, v2.Z)
+              r2.AssemblyLinearVelocity = Vector3.new(v2.X, 38, v2.Z)
             end
           end)
+        else
+          -- Float / Glide between double jumps so you don't drop back to floor
+          if v.Y < -6 then
+            hrp.AssemblyLinearVelocity = Vector3.new(v.X, v.Y * 0.55, v.Z)
+          end
         end
       else
         -- Ceiling reached: smooth hover without exceeding max height
@@ -4224,19 +4225,19 @@ do
         local diff = origin.Y - targetY
 
         if diff > 2.5 then
-          -- Gently ease down
+          -- Slightly above ceiling -> gently float down
           hrp.AssemblyLinearVelocity = Vector3.new(
             v.X * 0.85,
             math.min(v.Y, -4),
             v.Z * 0.85
           )
         elseif diff < -2.5 then
-          -- Mini gentle double jump boost back up to ceiling
-          if now - _cmJumpCycleAt >= 0.9 then
+          -- Dipped below ceiling -> mini double jump boost back up to ceiling
+          if now - _cmJumpCycleAt >= 0.85 then
             _cmJumpCycleAt = now
             pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-            local hNudge = horizontalVel * 0.35
-            hrp.AssemblyLinearVelocity = Vector3.new((v.X * 0.5) + hNudge.X, 22, (v.Z * 0.5) + hNudge.Z)
+            local hNudge = horizontalVel * 0.4
+            hrp.AssemblyLinearVelocity = Vector3.new((v.X * 0.4) + hNudge.X, 26, (v.Z * 0.4) + hNudge.Z)
             task.delay(0.12, function()
               local c2 = LP.Character
               local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
@@ -4244,7 +4245,7 @@ do
               if h2 and r2 and h2.Health > 0 and Config.CombatMaster and Config.CMFly then
                 pcall(function() h2:ChangeState(Enum.HumanoidStateType.Jumping) end)
                 local v2 = r2.AssemblyLinearVelocity
-                r2.AssemblyLinearVelocity = Vector3.new(v2.X, 22, v2.Z)
+                r2.AssemblyLinearVelocity = Vector3.new(v2.X, 28, v2.Z)
               end
             end)
           end
@@ -4252,7 +4253,7 @@ do
           -- Stable in hover band -> float gently
           hrp.AssemblyLinearVelocity = Vector3.new(
             v.X * 0.9,
-            v.Y * 0.5,
+            v.Y * 0.4,
             v.Z * 0.9
           )
         end
