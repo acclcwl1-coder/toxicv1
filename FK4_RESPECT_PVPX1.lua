@@ -4197,93 +4197,150 @@ do
     end)
   end))
 
-  -- ── AUTO FLY-JUMP: hover + smart strafe toward nearest enemy ───────────
-  local CM_HOVER_HEIGHT = 6      -- studs above floor
-  local CM_BAND         = 2.5    -- tolerance ±2.5 studs
-  local CM_PULL_FORCE   = -28    -- downward Y when too high
-  local CM_JUMP_POWER   = 22     -- upward Y impulse when too low
-  local _cmJumpAt       = 0
+  -- ── AUTO FLY DOUBLE-JUMP & ENEMY STRAFE ─────────────────────────────────
+  local _cmJumpCycleAt  = 0
+  local _cmStrafeSwapAt = 0
   local _cmStrafeDir    = 1
 
-  -- floor raycast params (reused every beat to avoid GC)
   local _cmRayParams = RaycastParams.new()
   _cmRayParams.FilterType = Enum.RaycastFilterType.Exclude
   _cmRayParams.IgnoreWater = true
 
-  -- FIX 2: nearest enemy for smart strafe direction
-  local function getNearestEnemyHRP(myHRP)
-    local best, bestDist = nil, math.huge
-    for _, pl in ipairs(Players:GetPlayers()) do
-      if pl ~= LP and not isTeammate(pl) then
-        local c   = pl.Character
-        local hrp = c and c:FindFirstChild("HumanoidRootPart")
-        local hum = c and c:FindFirstChildOfClass("Humanoid")
-        if hrp and hum and hum.Health > 0 then
-          local d = (hrp.Position - myHRP.Position).Magnitude
-          if d < bestDist then bestDist = d; best = hrp end
+  local function getStrafeEnemy(myPos)
+    if State.SilentTarget and State.SilentTarget.Parent then
+      local hrp = State.SilentTarget.Parent:FindFirstChild("HumanoidRootPart")
+      local hum = State.SilentTarget.Parent:FindFirstChildOfClass("Humanoid")
+      if hrp and hum and hum.Health > 0 then return hrp end
+    end
+    if State.CachedTarget and State.CachedTarget:FindFirstChild("HumanoidRootPart") then
+      local hum = State.CachedTarget:FindFirstChildOfClass("Humanoid")
+      if hum and hum.Health > 0 then return State.CachedTarget.HumanoidRootPart end
+    end
+    local bestPart, bestDist = nil, 2000
+    for _, p in ipairs(Players:GetPlayers()) do
+      if p ~= LP and p.Character then
+        local eHum = p.Character:FindFirstChildOfClass("Humanoid")
+        local eHrp = p.Character:FindFirstChild("HumanoidRootPart")
+        if eHum and eHum.Health > 0 and eHrp then
+          local isEnemy = not (Config.TeamCheck and p.Team and LP.Team and p.Team == LP.Team)
+          if isEnemy then
+            local d = (eHrp.Position - myPos).Magnitude
+            if d < bestDist then bestDist = d; bestPart = eHrp end
+          end
         end
       end
     end
-    return best
+    return bestPart
   end
 
   regConn(RunService.Heartbeat:Connect(function()
     if not Config.CombatMaster then return end
+    if not Config.CMFly then return end
     local now = os.clock()
-    if now - _cmJumpAt < 0.35 then return end
-    _cmJumpAt = now
-    pcall(function()
-      local char = LP.Character
-      local hum  = char and char:FindFirstChildOfClass("Humanoid")
-      local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-      if not hum or not hrp or hum.Health <= 0 or hum.Sit then return end
+    local char = LP.Character
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hum or not hrp or hum.Health <= 0 or hum.Sit then return end
 
-      -- ── 1. Find floor Y via downward raycast ─────────────────────────
+    pcall(function()
       _cmRayParams.FilterDescendantsInstances = { char }
       local origin = hrp.Position
-      local ray    = workspace:Raycast(origin, Vector3.new(0, -150, 0), _cmRayParams)
+      local ray = workspace:Raycast(origin, Vector3.new(0, -250, 0), _cmRayParams)
       local floorY = ray and (origin.Y - ray.Distance) or (origin.Y - 3.5)
-
-      -- ── 2. Where are we relative to the target band ──────────────────
-      local targetY  = floorY + CM_HOVER_HEIGHT
-      local currentY = origin.Y
-      local diff     = currentY - targetY
+      local currentHeight = origin.Y - floorY
+      local maxHeight = Config.CMFlyHeight or 35
 
       local v = hrp.AssemblyLinearVelocity
 
-      if diff > CM_BAND then
-        -- TOO HIGH → push down
-        hrp.AssemblyLinearVelocity = Vector3.new(v.X, math.min(v.Y, CM_PULL_FORCE), v.Z)
+      -- Enemy-relative movement
+      local horizontalVel = Vector3.zero
+      local enemyPart = getStrafeEnemy(origin)
 
-      elseif diff < -CM_BAND then
-        -- TOO LOW → jump impulse
-        hum:ChangeState(Enum.HumanoidStateType.Jumping)
-        hrp.AssemblyLinearVelocity = Vector3.new(v.X, CM_JUMP_POWER, v.Z)
+      if enemyPart then
+        local toEnemy = (enemyPart.Position - origin)
+        local dist2d = Vector2.new(toEnemy.X, toEnemy.Z).Magnitude
+        local flatForward = toEnemy.Magnitude > 1 and Vector3.new(toEnemy.X, 0, toEnemy.Z).Unit or Vector3.zero
+        local flatTangent = Vector3.new(-flatForward.Z, 0, flatForward.X)
 
-        -- FIX 2: strafe perpendicular to nearest enemy, fallback camera right
-        local strafeVec
-        local enemyHRP = getNearestEnemyHRP(hrp)
-        if enemyHRP then
-          local flat = Vector3.new(
-            enemyHRP.Position.X - origin.X, 0,
-            enemyHRP.Position.Z - origin.Z)
-          if flat.Magnitude > 0.1 then
-            local fwd   = flat.Unit
-            local right = Vector3.new(fwd.Z, 0, -fwd.X)
-            strafeVec   = right * (_cmStrafeDir * 10)
+        local strafePart = Vector3.zero
+        if Config.CMStrafe then
+          if now - _cmStrafeSwapAt > 0.85 then
+            _cmStrafeSwapAt = now
+            _cmStrafeDir = -_cmStrafeDir
+          end
+          strafePart = flatTangent * (_cmStrafeDir * 20)
+        end
+
+        local chasePart = Vector3.zero
+        if Config.CMChase and flatForward.Magnitude > 0 then
+          local desiredDist = Config.CMChaseDistance or 50
+          local distDiff = dist2d - desiredDist
+          if distDiff > 8 then
+            chasePart = flatForward * math.clamp(distDiff * 0.6, 15, 32)
+          elseif distDiff < -12 then
+            chasePart = -flatForward * 14
           end
         end
-        if not strafeVec then
-          strafeVec = Camera.CFrame.RightVector * (_cmStrafeDir * 10)
-        end
-        _cmStrafeDir = -_cmStrafeDir
-        local v2 = hrp.AssemblyLinearVelocity
-        hrp.AssemblyLinearVelocity = Vector3.new(
-          v2.X + strafeVec.X, v2.Y, v2.Z + strafeVec.Z)
-
+        horizontalVel = strafePart + chasePart
       else
-        -- INSIDE BAND → hover: damp vertical drift
-        hrp.AssemblyLinearVelocity = Vector3.new(v.X, v.Y * 0.4, v.Z)
+        if Config.CMStrafe then
+          local rv = Camera.CFrame.RightVector
+          local strafeVec = Vector3.new(rv.X, 0, rv.Z).Unit
+          if now - _cmStrafeSwapAt > 0.85 then
+            _cmStrafeSwapAt = now
+            _cmStrafeDir = -_cmStrafeDir
+          end
+          horizontalVel = strafeVec * (_cmStrafeDir * 18)
+        end
+      end
+
+      if currentHeight < maxHeight - 2 then
+        if now - _cmJumpCycleAt >= 1.0 then
+          _cmJumpCycleAt = now
+          pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+          local hNudge = horizontalVel * 0.5
+          hrp.AssemblyLinearVelocity = Vector3.new(
+            (v.X * 0.4) + hNudge.X, 36, (v.Z * 0.4) + hNudge.Z)
+          task.delay(0.14, function()
+            local c2 = LP.Character
+            local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
+            local r2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+            if h2 and r2 and h2.Health > 0 and Config.CombatMaster and Config.CMFly then
+              pcall(function() h2:ChangeState(Enum.HumanoidStateType.Jumping) end)
+              local v2 = r2.AssemblyLinearVelocity
+              r2.AssemblyLinearVelocity = Vector3.new(v2.X, 38, v2.Z)
+            end
+          end)
+        else
+          if v.Y < -6 then
+            hrp.AssemblyLinearVelocity = Vector3.new(v.X, v.Y * 0.55, v.Z)
+          end
+        end
+      else
+        local targetY = floorY + maxHeight
+        local diff = origin.Y - targetY
+        if diff > 2.5 then
+          hrp.AssemblyLinearVelocity = Vector3.new(v.X * 0.85, math.min(v.Y, -4), v.Z * 0.85)
+        elseif diff < -2.5 then
+          if now - _cmJumpCycleAt >= 0.85 then
+            _cmJumpCycleAt = now
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+            local hNudge = horizontalVel * 0.4
+            hrp.AssemblyLinearVelocity = Vector3.new((v.X * 0.4) + hNudge.X, 26, (v.Z * 0.4) + hNudge.Z)
+            task.delay(0.12, function()
+              local c2 = LP.Character
+              local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
+              local r2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+              if h2 and r2 and h2.Health > 0 and Config.CombatMaster and Config.CMFly then
+                pcall(function() h2:ChangeState(Enum.HumanoidStateType.Jumping) end)
+                local v2 = r2.AssemblyLinearVelocity
+                r2.AssemblyLinearVelocity = Vector3.new(v2.X, 28, v2.Z)
+              end
+            end)
+          end
+        else
+          hrp.AssemblyLinearVelocity = Vector3.new(v.X * 0.9, v.Y * 0.4, v.Z * 0.9)
+        end
       end
     end)
   end))
