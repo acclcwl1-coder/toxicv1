@@ -186,6 +186,10 @@ CombatMaster       = false,   -- Master God Mode Combo
 CMFly              = true,    -- CM: Auto Double Jump Fly
 CMFlyHeight        = 35,      -- CM: Height limit above floor (studs)
 CMStrafe           = true,    -- CM: Enemy-relative Left/Right Strafe
+CMChase            = true,    -- CM: Auto chase toward enemy
+CMChaseDistance    = 50,      -- CM: Ideal orbit distance (studs)
+CMOrbit            = true,    -- CM: Smart orbital movement around enemy
+CMAutoCamera       = true,    -- CM: Auto rotate camera to target behind you
 AutoReload         = false,   -- Auto Spam Recharge on empty
 InfiniteAmmo       = false,   -- Smart Adaptive Infinite Ammo (Never exceeds legal gun mag)
 InfiniteStamina    = false,
@@ -3590,6 +3594,9 @@ makeToggleRow(p0, "Combat Master (God Combo)", Config.CombatMaster, function(on)
 makeToggleRow(p0, "Auto Double-Jump Fly", Config.CMFly, function(on) Config.CMFly = on end, "CMFly")
 makeStepperRow(p0, "Fly Max Height", Config.CMFlyHeight, 15, 80, 5, function(n) Config.CMFlyHeight = n end, "CMFlyHeight")
 makeToggleRow(p0, "Enemy Target Strafe", Config.CMStrafe, function(on) Config.CMStrafe = on end, "CMStrafe")
+makeToggleRow(p0, "Auto Chase Enemy", Config.CMChase, function(on) Config.CMChase = on end, "CMChase")
+makeStepperRow(p0, "Orbit Distance", Config.CMChaseDistance, 20, 100, 5, function(n) Config.CMChaseDistance = n end, "CMChaseDistance")
+makeToggleRow(p0, "Auto Camera to Target", Config.CMAutoCamera, function(on) Config.CMAutoCamera = on end, "CMAutoCamera")
 makeToggleRow(p0, "Auto Spam Recharge", Config.AutoReload, function(on) Config.AutoReload = on end, "AutoReload")
 local p1 = addSub("Silent Aim")
 makeToggleRow(p1, "Silent Aim", Config.SilentAim, function(on) Config.SilentAim = on end, "SilentAim")
@@ -4171,26 +4178,64 @@ do
 
       local v = hrp.AssemblyLinearVelocity
 
-      -- 2. Enemy-relative strafe vector
-      local strafeVec = nil
-      if Config.CMStrafe then
-        local enemyPart = getStrafeEnemy(origin)
-        if enemyPart then
-          local toEnemy = (enemyPart.Position - origin)
-          local flat = Vector3.new(toEnemy.X, 0, toEnemy.Z)
-          if flat.Magnitude > 1.5 then
-            local forward = flat.Unit
-            strafeVec = Vector3.new(-forward.Z, 0, forward.X) -- tangent/orbit perpendicular
+      -- 2. Enemy-relative movement (Forward Chase + Orbit Strafe + Auto Camera)
+      local horizontalVel = Vector3.zero
+      local enemyPart = getStrafeEnemy(origin)
+
+      if enemyPart then
+        local toEnemy = (enemyPart.Position - origin)
+        local dist2d = Vector2.new(toEnemy.X, toEnemy.Z).Magnitude
+        local flatForward = toEnemy.Magnitude > 1 and Vector3.new(toEnemy.X, 0, toEnemy.Z).Unit or Vector3.zero
+        local flatTangent = Vector3.new(-flatForward.Z, 0, flatForward.X)
+
+        -- Auto Camera rotate if enemy is behind or outside direct view
+        if Config.CMAutoCamera and not Config.GuiVisible and Camera then
+          local camPos = Camera.CFrame.Position
+          local lookDir = Camera.CFrame.LookVector
+          local toEnemyCam = (enemyPart.Position - camPos).Unit
+          local dot = lookDir:Dot(toEnemyCam)
+          if dot < 0.65 then
+            local desiredCF = CFrame.lookAt(camPos, enemyPart.Position)
+            Camera.CFrame = Camera.CFrame:Lerp(desiredCF, 0.12)
           end
         end
-        if not strafeVec then
-          local rv = Camera.CFrame.RightVector
-          strafeVec = Vector3.new(rv.X, 0, rv.Z).Unit
+
+        -- Orbit Strafe (left / right)
+        local strafePart = Vector3.zero
+        if Config.CMStrafe then
+          if now - _cmStrafeSwapAt > 0.85 then
+            _cmStrafeSwapAt = now
+            _cmStrafeDir = -_cmStrafeDir
+          end
+          strafePart = flatTangent * (_cmStrafeDir * 20)
         end
 
-        if now - _cmStrafeSwapAt > 0.85 then
-          _cmStrafeSwapAt = now
-          _cmStrafeDir = -_cmStrafeDir
+        -- Forward / Backward Chase
+        local chasePart = Vector3.zero
+        if Config.CMChase and flatForward.Magnitude > 0 then
+          local desiredDist = Config.CMChaseDistance or 50
+          local distDiff = dist2d - desiredDist
+          if distDiff > 8 then
+            -- Far away: move forward towards enemy!
+            local speed = math.clamp(distDiff * 0.5, 12, 28)
+            chasePart = flatForward * speed
+          elseif distDiff < -12 then
+            -- Too close: back up smoothly to keep ideal distance!
+            chasePart = -flatForward * 14
+          end
+        end
+
+        horizontalVel = strafePart + chasePart
+      else
+        -- Fallback if no enemy: strafe with camera right vector
+        if Config.CMStrafe then
+          local rv = Camera.CFrame.RightVector
+          local strafeVec = Vector3.new(rv.X, 0, rv.Z).Unit
+          if now - _cmStrafeSwapAt > 0.85 then
+            _cmStrafeSwapAt = now
+            _cmStrafeDir = -_cmStrafeDir
+          end
+          horizontalVel = strafeVec * (_cmStrafeDir * 18)
         end
       end
 
@@ -4200,11 +4245,10 @@ do
           _cmJumpCycleAt = now
           -- 1st jump impulse
           pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-          local sVel = strafeVec and (strafeVec * (_cmStrafeDir * 22)) or Vector3.zero
           hrp.AssemblyLinearVelocity = Vector3.new(
-            (v.X * 0.4) + sVel.X,
+            (v.X * 0.35) + horizontalVel.X,
             42,
-            (v.Z * 0.4) + sVel.Z
+            (v.Z * 0.35) + horizontalVel.Z
           )
           -- 2nd jump impulse (smart double jump after 0.14s)
           task.delay(0.14, function()
@@ -4219,24 +4263,23 @@ do
           end)
         end
       else
-        -- Ceiling reached: hover & strafe without exceeding 22-24m
+        -- Ceiling reached: hover & strafe without exceeding max height
         local targetY = floorY + maxHeight
         local diff = origin.Y - targetY
-        local sVel = strafeVec and (strafeVec * (_cmStrafeDir * 22)) or Vector3.zero
 
         if diff > 3 then
           -- Slightly too high -> gently ease down, never harsh slam
           hrp.AssemblyLinearVelocity = Vector3.new(
-            (v.X * 0.3) + sVel.X,
+            (v.X * 0.3) + horizontalVel.X,
             math.min(v.Y, -8),
-            (v.Z * 0.3) + sVel.Z
+            (v.Z * 0.3) + horizontalVel.Z
           )
         elseif diff < -2 then
           -- Dipped below ceiling -> mini double jump boost back up
           if now - _cmJumpCycleAt >= 0.8 then
             _cmJumpCycleAt = now
             pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-            hrp.AssemblyLinearVelocity = Vector3.new((v.X * 0.4) + sVel.X, 26, (v.Z * 0.4) + sVel.Z)
+            hrp.AssemblyLinearVelocity = Vector3.new((v.X * 0.35) + horizontalVel.X, 26, (v.Z * 0.35) + horizontalVel.Z)
             task.delay(0.12, function()
               local c2 = LP.Character
               local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
@@ -4249,11 +4292,11 @@ do
             end)
           end
         else
-          -- Stable in hover band -> float & continuous strafe
+          -- Stable in hover band -> float & continuous strafe / chase
           hrp.AssemblyLinearVelocity = Vector3.new(
-            (v.X * 0.3) + sVel.X,
+            (v.X * 0.3) + horizontalVel.X,
             v.Y * 0.4,
-            (v.Z * 0.3) + sVel.Z
+            (v.Z * 0.3) + horizontalVel.Z
           )
         end
       end
