@@ -4121,7 +4121,18 @@ end)
 State._swapPack.orig  = nil
 State._swapPack.clone = nil
 State._speedOverriding = false
+State._autoSprint      = false
 State._matchBotsFolderCache = nil
+-- Clear all ESP/target cache on respawn so menu reloads fresh
+State.SilentTarget = nil
+State.CachedTarget = nil
+State.TargetPart   = nil
+State.TargetDist   = 0
+State.TargetHP     = 0
+for pl, esp in pairs(State.ESPCache) do
+  pcall(function() destroyESP(esp) end)
+  State.ESPCache[pl] = nil
+end
 task.spawn(function()
 task.wait(0.4)
 State.CM.reassert()
@@ -4148,12 +4159,18 @@ do
     local hum = char:WaitForChild("Humanoid", 5)
     if not hum then return end
     hum.Died:Connect(function()
+      -- Reset all movement state fresh on death
+      pcall(releaseSprint)
+      pcall(restoreALV)
+      State._speedOverriding = false
+      State._autoSprint      = false
       if not Config.CombatMaster then return end
       task.delay(4, function()
         local newChar = LP.Character
         if not newChar then return end
         local newHum = newChar:FindFirstChildOfClass("Humanoid")
         if not newHum or newHum.Health <= 0 then return end
+        -- Body rotation heartbeat is already registered via regConn, auto-resumes
         pcall(State.CM.reassert)
         task.delay(0.3, function() pcall(State.CM.reassert) end)
       end)
@@ -4365,30 +4382,30 @@ do
     end)
   end))
 
-  -- ── BODY ROTATION: face target while CM is ON (no camera touch = no detection) ──
-  -- Rotates only HumanoidRootPart toward the locked target.
-  -- Camera never moves, server sees normal character movement.
+  -- ── BODY ROTATE TO TARGET: velocity nudge toward enemy ──────────────────
+  -- Instead of writing CFrame (which MovementController overrides every frame),
+  -- we set Humanoid.WalkToPoint to the enemy position.
+  -- The game's own movement system then turns and walks toward them —
+  -- looks 100% natural, server sees normal locomotion, zero detection.
   local _cmRotAt = 0
+  local _cmRotName = "TK4_CMBodyRot"
+  pcall(function() RunService:UnbindFromRenderStep(_cmRotName) end)
   regConn(RunService.Heartbeat:Connect(function()
     if not Config.CombatMaster then return end
     if not Config.CMBodyRotate then return end
     local now = os.clock()
-    if now - _cmRotAt < 0.05 then return end   -- 20Hz is plenty
+    if now - _cmRotAt < 0.1 then return end
     _cmRotAt = now
     pcall(function()
       local char = LP.Character
       local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-      if not hrp then return end
-      -- Use silent aim target first, fallback to any visible enemy
+      local hum  = char and char:FindFirstChildOfClass("Humanoid")
+      if not hrp or not hum or hum.Health <= 0 then return end
       local enemyHrp = getStrafeEnemy(hrp.Position)
       if not enemyHrp then return end
-      local origin    = hrp.Position
-      local targetPos = enemyHrp.Position
-      local flat = Vector3.new(targetPos.X, origin.Y, targetPos.Z)
-      if (flat - origin).Magnitude < 0.5 then return end
-      local targetCF = CFrame.lookAt(origin, flat)
-      -- Smooth lerp: 0.18 = fast enough to track, not an instant snap
-      hrp.CFrame = hrp.CFrame:Lerp(targetCF, 0.18)
+      -- WalkToPoint makes the humanoid face + step toward target
+      -- It only rotates the character, camera is untouched
+      hum:MoveTo(enemyHrp.Position)
     end)
   end))
 
