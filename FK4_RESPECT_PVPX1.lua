@@ -594,6 +594,12 @@ end)
 
 pcall(function()
 
+HudController = require(ReplicatedStorage.Client.Controllers.HudController)
+
+end)
+
+pcall(function()
+
 CameraController = require(ReplicatedStorage.Client.Controllers.CameraController)
 
 end)
@@ -684,7 +690,7 @@ end
 
 
 
-if Config.FullAuto and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+if (Config.FullAuto or Config.CombatMaster) and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
 
 local isReloading = ClientState and ClientState.Reloading
 
@@ -692,7 +698,7 @@ local cursorFree = ClientState and (ClientState.CursorFree or (ClientState.InMen
 
 if not isReloading and not cursorFree then
 
-if WeaponController.SetTrigger then
+if WeaponController and WeaponController.SetTrigger then
 
 pcall(WeaponController.SetTrigger, true)
 
@@ -703,26 +709,6 @@ end
 end
 
 
-
--- AUTO SPAM RECHARGE / AUTO RELOAD
-if (Config.AutoReload or Config.CombatMaster) and not Config.InfiniteAmmo then
-local isReloading = ClientState and ClientState.Reloading
-local cursorFree = ClientState and (ClientState.CursorFree or (ClientState.InMenu and ClientState.InMenu()))
-if not isReloading and not cursorFree then
-local startReloadFn = WeaponController and WeaponController.Reload and getupvaluesFn(WeaponController.Reload)[1]
-if type(startReloadFn) == "function" then
-local rUps = getupvaluesFn(startReloadFn)
-if rUps then
-local curAmmo = rUps[7]
-if type(curAmmo) == "number" and curAmmo <= 0 then
-if WeaponController.Reload then
-pcall(WeaponController.Reload)
-end
-end
-end
-end
-end
-end
 
 -- SMART ADAPTIVE INFINITE AMMO & ANTI-RELOAD LOCK
 
@@ -742,10 +728,6 @@ local maxMag  = rUps[8] -- u78: exact legal capacity of currently held gun
 
 local wData   = rUps[10] -- u75: weapon data table
 
-
-
--- Dynamic legal max: Glock=17, AR=25, AK=30, 1911=7, AW50=5, Kar98k=5, RPG=1
-
 local legalMax = (type(maxMag) == "number" and maxMag > 0) and maxMag
 
 or (wData and wData.Ammo and wData.Ammo.Mag)
@@ -754,23 +736,75 @@ or (u75 and u75.Ammo and u75.Ammo.Mag)
 
 or 17
 
-
-
--- Refill when ammo is low (<= 2) BEFORE reaching 0, keeping it strictly legal
-
 if type(curAmmo) == "number" and curAmmo <= 2 then
 
 setupvalueFn(startReloadFn, 7, legalMax)
 
 end
 
+-- Dismiss stuck reload animation if ammo is full
 
-
--- Cancel accidental or lock reload animation so fire is uninterrupted
-
-if ClientState and ClientState.Reloading then
+if ClientState and ClientState.Reloading and curAmmo and curAmmo >= legalMax then
 
 ClientState.Reloading = false
+
+if HudController and HudController.SetReloading then
+
+pcall(function() HudController.SetReloading(false) end)
+
+end
+
+end
+
+end
+
+end
+
+end
+
+
+
+-- AUTO SPAM RECHARGE / AUTO RELOAD (Cadenced 0.5s when NOT firing)
+
+if (Config.AutoReload or Config.CombatMaster) then
+
+local now = os.clock()
+
+if (now - (_G._TK4_LastSpamReload or 0) >= 0.5) then
+
+local isReloading = ClientState and ClientState.Reloading
+
+local cursorFree = ClientState and (ClientState.CursorFree or (ClientState.InMenu and ClientState.InMenu()))
+
+local isFiring = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+
+if not isReloading and not cursorFree and not isFiring then
+
+local startReloadFn = WeaponController and WeaponController.Reload and getupvaluesFn(WeaponController.Reload)[1]
+
+if type(startReloadFn) == "function" then
+
+local rUps = getupvaluesFn(startReloadFn)
+
+if rUps then
+
+local curAmmo = rUps[7]
+
+local maxMag  = rUps[8] or 17
+
+if type(curAmmo) == "number" and curAmmo < maxMag then
+
+_G._TK4_LastSpamReload = now
+
+if WeaponController.Reload then
+
+pcall(WeaponController.Reload)
+
+end
+
+end
+
+end
 
 end
 
@@ -792,9 +826,9 @@ for name, w in pairs(WeaponData) do
 
 if type(w) == "table" and w.Fire and originalWeaponStats[name] then
 
-if Config.RapidFire then
+if Config.RapidFire or Config.CombatMaster then
 
-local mult = Config.RapidMultiplier or 2.0
+local mult = Config.CombatMaster and 2.3 or (Config.RapidMultiplier or 2.0)
 
 w.Fire.RPM = math.round(originalWeaponStats[name].RPM * mult)
 
@@ -804,7 +838,7 @@ w.Fire.RPM = originalWeaponStats[name].RPM
 
 end
 
-if Config.FullAuto then
+if Config.FullAuto or Config.CombatMaster then
 
 w.Fire.Mode = "Auto"
 
@@ -814,7 +848,7 @@ w.Fire.Mode = originalWeaponStats[name].Mode
 
 end
 
-if Config.NoRecoil and w.Recoil then
+if (Config.NoRecoil or Config.CombatMaster) and w.Recoil then
 
 w.Recoil.Up = 0
 
@@ -908,99 +942,12 @@ end
 
 end
 
-local _combatMasterThread = nil
-local _combatMasterBackup = nil
-
 local function setCombatMaster(enabled)
   Config.CombatMaster = enabled
-  if enabled then
-    _combatMasterBackup = {
-      SilentAim       = Config.SilentAim,
-      HitPart         = Config.HitPart,
-      HitChance       = Config.HitChance,
-      FOVRadius       = Config.FOVRadius,
-      WallCheck       = Config.WallCheck,
-      RapidFire       = Config.RapidFire,
-      RapidMultiplier = Config.RapidMultiplier,
-      FullAuto        = Config.FullAuto,
-      InfiniteAmmo    = Config.InfiniteAmmo,
-      AutoReload      = Config.AutoReload,
-      InfiniteStamina = Config.InfiniteStamina,
-      AutoSprint      = Config.AutoSprint,
-      NoRecoil        = Config.NoRecoil,
-      NoBloom         = Config.NoBloom,
-    }
-
-    Config.SilentAim       = true
-    Config.HitPart         = "Head"
-    Config.HitChance       = 100
-    Config.FOVRadius       = 999
-    Config.WallCheck       = false
-    Config.RapidFire       = true
-    Config.RapidMultiplier = 2.3
-    Config.FullAuto        = true
-    Config.InfiniteAmmo    = true
-    Config.AutoReload      = true
-    Config.InfiniteStamina = true
-    Config.AutoSprint      = true
-    Config.NoRecoil        = true
-    Config.NoBloom         = true
-
-    pcall(applyWeaponMods)
-    pcall(resetWeaponCooldown)
-
-    if not _combatMasterThread then
-      _combatMasterThread = task.spawn(function()
-        local strafeDir = 1
-        while Config.CombatMaster do
-          local char = LP.Character
-          local hum = char and char:FindFirstChildOfClass("Humanoid")
-          local hrp = char and char:FindFirstChild("HumanoidRootPart")
-
-          if hum and hrp and hum.Health > 0 and not hum.Sit and not hum.PlatformStand then
-            -- Double Jump burst
-            hum:ChangeState(Enum.HumanoidStateType.Jumping)
-            task.wait(0.12)
-            if not Config.CombatMaster then break end
-            hum:ChangeState(Enum.HumanoidStateType.Jumping)
-
-            -- 1.0 second evasive air-strafe oscillation ("like a fly")
-            local tStart = os.clock()
-            while (os.clock() - tStart) < 1.0 and Config.CombatMaster do
-              task.wait(0.03)
-              if not hrp or not hum or hum.Health <= 0 then break end
-
-              local camCF = workspace.CurrentCamera and workspace.CurrentCamera.CFrame
-              local rightVec = camCF and camCF.RightVector or Vector3.new(1, 0, 0)
-              rightVec = Vector3.new(rightVec.X, 0, rightVec.Z).Unit
-
-              local curY = hrp.AssemblyLinearVelocity.Y
-              local strafeSpeed = 36 * strafeDir
-              hrp.AssemblyLinearVelocity = Vector3.new(
-                rightVec.X * strafeSpeed,
-                curY,
-                rightVec.Z * strafeSpeed
-              )
-            end
-
-            strafeDir = -strafeDir
-          else
-            task.wait(0.3)
-          end
-        end
-        _combatMasterThread = nil
-      end)
-    end
-  else
-    _combatMasterThread = nil
-    if _combatMasterBackup then
-      for k, v in pairs(_combatMasterBackup) do
-        Config[k] = v
-      end
-      _combatMasterBackup = nil
-    end
-    pcall(applyWeaponMods)
-    pcall(resetWeaponCooldown)
+  pcall(applyWeaponMods)
+  pcall(resetWeaponCooldown)
+  if enabled and HudController and HudController.SetReloading then
+    pcall(function() HudController.SetReloading(false) end)
   end
 end
 
@@ -2194,13 +2141,13 @@ end
 
 local function findSilentTarget()
 
-if not Config.SilentAim then return nil, nil end
+if not (Config.SilentAim or Config.CombatMaster) then return nil, nil end
 
 local mousePos = getAimScreenCenter()
 
 local camPos   = Camera.CFrame.Position
 
-local shortest = Config.FOVRadius
+local shortest = Config.CombatMaster and 9999 or Config.FOVRadius
 
 local bestPart, bestPlayer = nil, nil
 
@@ -2312,7 +2259,7 @@ local method = getnamecallmethod()
 
 local args = {...}
 
-if Config.SilentAim and method == "FireServer" and typeof(self) == "Instance" then
+if (Config.SilentAim or Config.CombatMaster) and method == "FireServer" and typeof(self) == "Instance" then
 
 if self.Name == "WeaponFire" then
 
@@ -2326,7 +2273,9 @@ end
 
 if targetPart then
 
-local hitChanceOk = (Config.HitChance >= 100) or (math.random(1, 100) <= Config.HitChance)
+local activeHitChance = Config.CombatMaster and 100 or Config.HitChance
+
+local hitChanceOk = (activeHitChance >= 100) or (math.random(1, 100) <= activeHitChance)
 
 if hitChanceOk then
 
@@ -8298,7 +8247,7 @@ end
 
 if gpe then return end  
 
-if Config.InfiniteJump and not Config.GuiVisible
+if (Config.InfiniteJump or Config.CombatMaster) and not Config.GuiVisible
 
 and inp.KeyCode == Enum.KeyCode.Space then
 
@@ -8312,7 +8261,7 @@ end)
 
 UserInputService.JumpRequest:Connect(function()
 
-if Config.InfiniteJump and UserInputService.TouchEnabled and not Config.GuiVisible then
+if (Config.InfiniteJump or Config.CombatMaster) and not Config.GuiVisible then
 
 local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
 
@@ -8754,7 +8703,7 @@ pcall(function()
 
 if Config.GuiVisible then return end
 
-if Config.SilentAim then
+if Config.SilentAim or Config.CombatMaster then
 
 local tPart, tPlr = findSilentTarget()
 
@@ -8806,7 +8755,7 @@ GameSettings.BloomScale = 0.8
 
 end
 
-if Config.NoShotSlowdown then
+if Config.NoShotSlowdown or Config.CombatMaster then
 
 pcall(function()
 
@@ -8870,7 +8819,7 @@ end)
 
 end
 
-if Config.InfiniteStamina then
+if Config.InfiniteStamina or Config.CombatMaster then
 
 pcall(function()
 
@@ -8882,7 +8831,7 @@ end)
 
 end
 
-if Config.FastCrouch then
+if Config.FastCrouch or Config.CombatMaster then
 
 pcall(function()
 
@@ -8958,7 +8907,7 @@ end)
 
 end
 
-if Config.NoJumpDelay then
+if Config.NoJumpDelay or Config.CombatMaster then
 
 pcall(function()
 
