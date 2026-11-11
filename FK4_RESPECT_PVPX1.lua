@@ -654,13 +654,13 @@ local u75 = updateUps[2]
 
 if type(u75) == "table" and u75.Fire then
 
-if Config.RapidFire then
+if Config.RapidFire or Config.CombatMaster then
 
 local baseRpm = u75.Fire._BaseRPM or u75.Fire.RPM
 
 if not u75.Fire._BaseRPM then u75.Fire._BaseRPM = baseRpm end
 
-local mult = Config.RapidMultiplier or 2.0
+local mult = Config.CombatMaster and 2.3 or (Config.RapidMultiplier or 2.0)
 
 u75.Fire.RPM = math.round(baseRpm * mult)
 
@@ -670,13 +670,13 @@ u75.Fire.RPM = u75.Fire._BaseRPM
 
 end
 
-if Config.FullAuto then
+if Config.FullAuto or Config.CombatMaster then
 
 u75.Fire.Mode = "Auto"
 
 end
 
-if Config.NoRecoil and u75.Recoil then
+if (Config.NoRecoil or Config.CombatMaster) and u75.Recoil then
 
 u75.Recoil.Up = 0
 
@@ -2847,11 +2847,9 @@ end
 
 local HasDrawing = pcall(function() return Drawing ~= nil and Drawing.new ~= nil end) and Drawing ~= nil
 
-local MOBILE_MODE = (UserInputService.TouchEnabled and not UserInputService.MouseEnabled) or (not HasDrawing)
-
 local FOVCircle = nil
 
-if HasDrawing and not MOBILE_MODE then
+if HasDrawing then
 
 pcall(function()
 
@@ -2972,1478 +2970,369 @@ return RESPECT_RANKS["Unranked"]
 end
 
 local function getESPColor(key, defaultCol)
-
-local r = Config["esp_col_" .. key .. "_r"]
-
-local g = Config["esp_col_" .. key .. "_g"]
-
-local b = Config["esp_col_" .. key .. "_b"]
-
-if r and g and b then
-
-return Color3.fromRGB(math.clamp(r, 0, 255), math.clamp(g, 0, 255), math.clamp(b, 0, 255))
-
-end
-
-return defaultCol or C.accent
-
+  local r = Config["esp_col_" .. key .. "_r"]
+  local g = Config["esp_col_" .. key .. "_g"]
+  local b = Config["esp_col_" .. key .. "_b"]
+  if r and g and b then
+    return Color3.fromRGB(math.clamp(r, 0, 255), math.clamp(g, 0, 255), math.clamp(b, 0, 255))
+  end
+  return defaultCol or C.accent
 end
 
 local function newDrawing(class, props)
-
-local obj = Drawing.new(class)
-
-for k, v in pairs(props or {}) do obj[k] = v end
-
-return obj
-
+  local obj = Drawing.new(class)
+  for k, v in pairs(props or {}) do obj[k] = v end
+  return obj
 end
 
 local function createESP(player)
-
-local esp = {}
-
-if HasDrawing and not MOBILE_MODE then
-
-esp.box      = {newDrawing("Line",{}), newDrawing("Line",{}), newDrawing("Line",{}), newDrawing("Line",{})}
-
-esp.corners  = {}
-
-esp.name     = newDrawing("Text", {Center = true, Outline = true, Size = Config.ESP_TextSize, Font = 2})
-
-esp.rank     = newDrawing("Text", {Center = false, Outline = true, Size = 13, Font = 2})
-
-esp.level    = newDrawing("Text", {Center = false, Outline = true, Size = 15, Font = 2})
-
-esp.dist     = newDrawing("Text", {Center = true, Outline = true, Size = Config.ESP_TextSize, Font = 2})
-
-esp.health   = newDrawing("Line", {Thickness = 2.5})
-
-esp.healthBg = newDrawing("Line", {Thickness = 2.5, Color = Color3.fromRGB(30, 20, 38)})
-
-esp.head     = newDrawing("Circle", {NumSides = 24, Thickness = 1.5, Filled = false})
-
-esp.bones    = {}
-
-esp.tracers  = newDrawing("Line", {Thickness = 1.2})
-
-for i = 1, 8 do esp.corners[i] = newDrawing("Line", {Thickness = 2}) end
-
-for i = 1, #R15_BONES do esp.bones[i] = newDrawing("Line", {Thickness = 1.4}) end
-
-end
-
-if MOBILE_MODE then
-
-local root = Instance.new("Frame")
-
-root.Name = "MESP_" .. tostring((type(player) == "table" and player.Name) or (player.Name or "X"))
-
-root.BackgroundTransparency = 1
-
-root.BorderSizePixel = 0
-
-root.Visible = false
-
-root.Parent = ESPGui
-
-esp.mRoot = root
-
-local box = Instance.new("Frame")
-
-box.Name = "Box"
-
-box.BackgroundTransparency = 1
-
-box.BorderSizePixel = 0
-
-box.Visible = false
-
-box.Parent = root
-
-local bStroke = Instance.new("UIStroke")
-
-bStroke.Thickness = 1.5
-
-bStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
-bStroke.Parent = box
-
-esp.mBox = box
-
-esp.mCorners = {}
-
-for i = 1, 8 do
-
-local f = Instance.new("Frame")
-
-f.Name = "MC" .. i
-
-f.BorderSizePixel = 0
-
-f.BackgroundColor3 = Color3.new(1, 1, 1)
-
-f.Visible = false
-
-f.Parent = root
-
-esp.mCorners[i] = f
-
-end
-
-local function mLbl(n, sz)
-
-local l = Instance.new("TextLabel")
-
-l.Name = n
-
-l.BackgroundTransparency = 1
-
-l.BorderSizePixel = 0
-
-l.Font = Enum.Font.GothamBold
-
-l.TextSize = sz
-
-l.TextStrokeTransparency = 0.35
-
-l.TextColor3 = Color3.new(1, 1, 1)
-
-l.ZIndex = 20
-
-l.Visible = false
-
-l.Parent = root
-
-return l
-
-end
-
-esp.mName = mLbl("Name", Config.ESP_TextSize or 13)
-
-esp.mName.AnchorPoint = Vector2.new(0.5, 1)
-
-esp.mName.Size = UDim2.fromOffset(240, 16)
-
-esp.mLevel = mLbl("Level", 15)
-
-esp.mLevel.AnchorPoint = Vector2.new(0, 0.5)
-
-esp.mLevel.Size = UDim2.fromOffset(80, 16)
-
-esp.mRank = mLbl("Rank", 13)
-
-esp.mRank.AnchorPoint = Vector2.new(0, 0.5)
-
-esp.mRank.Size = UDim2.fromOffset(120, 16)
-
-esp.mDist = mLbl("Dist", Config.ESP_TextSize or 13)
-
-esp.mDist.AnchorPoint = Vector2.new(0.5, 0)
-
-esp.mDist.Size = UDim2.fromOffset(120, 14)
-
-local hpBg = Instance.new("Frame")
-
-hpBg.Name = "HpBg"
-
-hpBg.BorderSizePixel = 0
-
-hpBg.BackgroundColor3 = Color3.fromRGB(30, 20, 38)
-
-hpBg.BackgroundTransparency = 0.25
-
-hpBg.Visible = false
-
-hpBg.Parent = root
-
-esp.mHpBg = hpBg
-
-local hpF = Instance.new("Frame")
-
-hpF.Name = "Hp"
-
-hpF.BorderSizePixel = 0
-
-hpF.BackgroundColor3 = Color3.new(0, 1, 0)
-
-hpF.Visible = false
-
-hpF.Parent = root
-
-esp.mHp = hpF
-
-local mHead = Instance.new("Frame")
-
-mHead.Name = "MHead"
-
-mHead.AnchorPoint = Vector2.new(0.5, 0.5)
-
-mHead.BackgroundTransparency = 1
-
-mHead.BorderSizePixel = 0
-
-mHead.Visible = false
-
-mHead.ZIndex = 8
-
-mHead.Parent = root
-
-local mHeadStroke = Instance.new("UIStroke")
-
-mHeadStroke.Thickness = 1.5
-
-mHeadStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
-mHeadStroke.Color = Color3.new(1, 1, 1)
-
-mHeadStroke.Parent = mHead
-
-local mHeadCorner = Instance.new("UICorner")
-
-mHeadCorner.CornerRadius = UDim.new(1, 0)
-
-mHeadCorner.Parent = mHead
-
-esp.mHead = mHead
-
-esp.mBones = {}
-
-for i = 1, #R15_BONES do
-
-local bf = Instance.new("Frame")
-
-bf.Name = "MB" .. i
-
-bf.AnchorPoint = Vector2.new(0.5, 0.5)
-
-bf.BorderSizePixel = 0
-
-bf.BackgroundColor3 = Color3.fromRGB(245, 245, 255)
-
-bf.Visible = false
-
-bf.ZIndex = 7
-
-bf.Parent = root
-
-esp.mBones[i] = bf
-
-end
-
-local mTracer = Instance.new("Frame")
-
-mTracer.Name = "MTracer"
-
-mTracer.AnchorPoint = Vector2.new(0.5, 0.5)
-
-mTracer.BorderSizePixel = 0
-
-mTracer.BackgroundColor3 = Color3.new(1, 1, 1)
-
-mTracer.Visible = false
-
-mTracer.ZIndex = 6
-
-mTracer.Parent = root
-
-esp.mTracer = mTracer
-
-end
-
-pcall(function()
-
-local badgeFrame = Instance.new("Frame", ESPGui)
-
-badgeFrame.Name = "RankBadge"
-
-badgeFrame.Size = UDim2.fromOffset(18, 18)
-
-badgeFrame.BackgroundTransparency = 1
-
-badgeFrame.BorderSizePixel = 0
-
-badgeFrame.Visible = false
-
-local badgeBase = Instance.new("ImageLabel", badgeFrame)
-
-badgeBase.Name = "Base"
-
-badgeBase.Size = UDim2.new(1, 0, 1, 0)
-
-badgeBase.BackgroundTransparency = 1
-
-badgeBase.Image = "rbxassetid://77587354723565"
-
-badgeBase.ZIndex = 10
-
-local badgeInner = Instance.new("ImageLabel", badgeFrame)
-
-badgeInner.Name = "Inner"
-
-badgeInner.Size = UDim2.new(1, 0, 1, 0)
-
-badgeInner.BackgroundTransparency = 1
-
-badgeInner.Image = "rbxassetid://70726727364699"
-
-badgeInner.ImageColor3 = Color3.fromRGB(120, 126, 140)
-
-badgeInner.ZIndex = 11
-
-local badgeGem = Instance.new("ImageLabel", badgeFrame)
-
-badgeGem.Name = "Gem"
-
-badgeGem.Size = UDim2.new(1, 0, 1, 0)
-
-badgeGem.BackgroundTransparency = 1
-
-badgeGem.Image = "rbxassetid://123146282595303"
-
-badgeGem.ZIndex = 12
-
-esp.badge = badgeFrame
-
-esp.badgeInner = badgeInner
-
-end)
-
-return esp
-
+  if not HasDrawing then return nil end
+  local esp = {
+    box      = {newDrawing("Line",{}), newDrawing("Line",{}), newDrawing("Line",{}), newDrawing("Line",{})},
+    corners  = {},
+    name     = newDrawing("Text", {Center = true, Outline = true, Size = Config.ESP_TextSize, Font = 2}),
+    rank     = newDrawing("Text", {Center = false, Outline = true, Size = 13, Font = 2}),
+    level    = newDrawing("Text", {Center = false, Outline = true, Size = 15, Font = 2}),
+    dist     = newDrawing("Text", {Center = true, Outline = true, Size = Config.ESP_TextSize, Font = 2}),
+    health   = newDrawing("Line", {Thickness = 2.5}),
+    healthBg = newDrawing("Line", {Thickness = 2.5, Color = Color3.fromRGB(30, 20, 38)}),
+    head     = newDrawing("Circle", {NumSides = 24, Thickness = 1.5, Filled = false}),
+    bones    = {},
+    tracers  = newDrawing("Line", {Thickness = 1.2}),
+  }
+  for i = 1, 8 do esp.corners[i] = newDrawing("Line", {Thickness = 2}) end
+  for i = 1, #R15_BONES do esp.bones[i] = newDrawing("Line", {Thickness = 1.4}) end
+
+  -- Real In-Game Rank Badge Icon from Respect PVP Templates (3-layer composite: Base, Inner, Gem)
+  pcall(function()
+    local badgeFrame = Instance.new("Frame", ESPGui)
+    badgeFrame.Name = "RankBadge"
+    badgeFrame.Size = UDim2.fromOffset(18, 18)
+    badgeFrame.BackgroundTransparency = 1
+    badgeFrame.BorderSizePixel = 0
+    badgeFrame.Visible = false
+
+    local badgeBase = Instance.new("ImageLabel", badgeFrame)
+    badgeBase.Name = "Base"
+    badgeBase.Size = UDim2.new(1, 0, 1, 0)
+    badgeBase.BackgroundTransparency = 1
+    badgeBase.Image = "rbxassetid://77587354723565"
+    badgeBase.ZIndex = 10
+
+    local badgeInner = Instance.new("ImageLabel", badgeFrame)
+    badgeInner.Name = "Inner"
+    badgeInner.Size = UDim2.new(1, 0, 1, 0)
+    badgeInner.BackgroundTransparency = 1
+    badgeInner.Image = "rbxassetid://70726727364699"
+    badgeInner.ImageColor3 = Color3.fromRGB(120, 126, 140)
+    badgeInner.ZIndex = 11
+
+    local badgeGem = Instance.new("ImageLabel", badgeFrame)
+    badgeGem.Name = "Gem"
+    badgeGem.Size = UDim2.new(1, 0, 1, 0)
+    badgeGem.BackgroundTransparency = 1
+    badgeGem.Image = "rbxassetid://123146282595303"
+    badgeGem.ZIndex = 12
+
+    esp.badge = badgeFrame
+    esp.badgeInner = badgeInner
+  end)
+
+  return esp
 end
 
 local function hideESP(esp)
-
-if not esp then return end
-
-if esp.box then
-
-for _, l in ipairs(esp.box) do l.Visible = false end
-
-for _, l in ipairs(esp.corners) do l.Visible = false end
-
-if esp.name then esp.name.Visible = false end
-
-if esp.rank then esp.rank.Visible = false end
-
-if esp.level then esp.level.Visible = false end
-
-if esp.dist then esp.dist.Visible = false end
-
-if esp.health then esp.health.Visible = false end
-
-if esp.healthBg then esp.healthBg.Visible = false end
-
-if esp.head then esp.head.Visible = false end
-
-if esp.tracers then esp.tracers.Visible = false end
-
-if esp.bones then for _, b in ipairs(esp.bones) do b.Visible = false end end
-
-end
-
-if esp.mRoot then esp.mRoot.Visible = false end
-
-if esp.badge then esp.badge.Visible = false end
-
+  if not esp then return end
+  for _, l in ipairs(esp.box) do l.Visible = false end
+  for _, l in ipairs(esp.corners) do l.Visible = false end
+  esp.name.Visible = false
+  if esp.rank then esp.rank.Visible = false end
+  if esp.level then esp.level.Visible = false end
+  if esp.badge then esp.badge.Visible = false end
+  esp.dist.Visible = false
+  esp.health.Visible = false
+  esp.healthBg.Visible = false
+  esp.head.Visible = false
+  esp.tracers.Visible = false
+  for _, b in ipairs(esp.bones) do b.Visible = false end
 end
 
 local function destroyESP(esp)
-
-if not esp then return end
-
-if esp.box then
-
-for _, l in ipairs(esp.box) do pcall(function() l:Remove() end) end
-
-for _, l in ipairs(esp.corners) do pcall(function() l:Remove() end) end
-
-if esp.name then pcall(function() esp.name:Remove() end) end
-
-if esp.rank then pcall(function() esp.rank:Remove() end) end
-
-if esp.level then pcall(function() esp.level:Remove() end) end
-
-if esp.dist then pcall(function() esp.dist:Remove() end) end
-
-if esp.health then pcall(function() esp.health:Remove() end) end
-
-if esp.healthBg then pcall(function() esp.healthBg:Remove() end) end
-
-if esp.head then pcall(function() esp.head:Remove() end) end
-
-if esp.tracers then pcall(function() esp.tracers:Remove() end) end
-
-if esp.bones then for _, b in ipairs(esp.bones) do pcall(function() b:Remove() end) end end
-
-end
-
-if esp.mRoot then pcall(function() esp.mRoot:Destroy() end) end
-
-if esp.badge then pcall(function() esp.badge:Destroy() end) end
-
+  if not esp then return end
+  for _, l in ipairs(esp.box) do pcall(function() l:Remove() end) end
+  for _, l in ipairs(esp.corners) do pcall(function() l:Remove() end) end
+  pcall(function() esp.name:Remove() end)
+  if esp.rank then pcall(function() esp.rank:Remove() end) end
+  if esp.level then pcall(function() esp.level:Remove() end) end
+  if esp.badge then pcall(function() esp.badge:Destroy() end) end
+  pcall(function() esp.dist:Remove() end)
+  pcall(function() esp.health:Remove() end)
+  pcall(function() esp.healthBg:Remove() end)
+  pcall(function() esp.head:Remove() end)
+  pcall(function() esp.tracers:Remove() end)
+  for _, b in ipairs(esp.bones) do pcall(function() b:Remove() end) end
 end
 
 local function updateESP(player, esp)
+  -- Keep ESP visible even if menu is open
+  if not Config.ESP_Master or not esp then hideESP(esp); return end
+  if player == LP or (Config.ESP_TeamCheck and isTeammate(player)) then hideESP(esp); return end
 
-if Config.GuiVisible then
+  local char = player.Character
+  if not char then hideESP(esp); return end
+  local hum  = char:FindFirstChildOfClass("Humanoid")
+  local hrp  = char:FindFirstChild("HumanoidRootPart")
+  local head = char:FindFirstChild("Head")
+  if not hum or hum.Health <= 0 or not hrp then hideESP(esp); return end
 
-hideESP(esp)
+  local camPos = Camera.CFrame.Position
+  local hrpPos = hrp.Position
+  local dist3d = (hrpPos - camPos).Magnitude
+  if dist3d > Config.ESP_MaxDistance then hideESP(esp); return end
 
-return
+  -- Direct 3D bounding projection (Ultra-fast, zero-lag, no caching jitter)
+  local headPos = (head and head.Position) or (hrpPos + Vector3.new(0, 1.5, 0))
+  local topWorld = headPos + Vector3.new(0, 0.7, 0)
+  local botWorld = hrpPos - Vector3.new(0, 3.0, 0)
 
+  local topScreen, topOn = Camera:WorldToViewportPoint(topWorld)
+  local botScreen, botOn = Camera:WorldToViewportPoint(botWorld)
+
+  if topScreen.Z <= 0 or botScreen.Z <= 0 or (not topOn and not botOn) then
+    hideESP(esp)
+    return
+  end
+
+  local boxH = math.abs(botScreen.Y - topScreen.Y)
+  if boxH < 3 or boxH > 4000 then hideESP(esp); return end
+
+  local boxW = math.floor(boxH * 0.58)
+  local midX = math.floor((topScreen.X + botScreen.X) * 0.5)
+  local topY = math.floor(math.min(topScreen.Y, botScreen.Y))
+  local botY = topY + boxH
+  local leftX = math.floor(midX - (boxW * 0.5))
+  local rightX = leftX + boxW
+
+  local hpRatio = math.clamp(hum.Health / (hum.MaxHealth > 0 and hum.MaxHealth or 100), 0, 1)
+  local hpColor = Color3.fromRGB(math.floor(255 * (1 - hpRatio)), math.floor(255 * hpRatio), 50)
+
+  -- Staff ESP: override box/name color when player is staff
+  local staffEntry = State._staffInServer and State._staffInServer[player]
+  local espBoxColor = staffEntry and staffEntry.color or C.accent
+  local staffTag = staffEntry and (" [" .. staffEntry.text .. "]") or ""
+
+  -- Custom ESP component colors from Free Color Picker
+  local customBoxCol    = getESPColor("box", espBoxColor)
+  local customSkelCol   = getESPColor("skel", Color3.fromRGB(245, 245, 255))
+  local customNameCol   = getESPColor("name", staffEntry and staffEntry.color or Color3.fromRGB(255, 255, 255))
+  local customDistCol   = getESPColor("dist", Color3.fromRGB(180, 170, 200))
+  local customTracerCol = getESPColor("tracer", C.accent)
+  local customHeadCol   = getESPColor("head", C.accent)
+
+  -- Level / Rank from player attributes (RespectPVP_Player_Roles_And_Levels_Guide.md)
+  local plLevel  = (typeof(player) == "Instance" and player:GetAttribute("Level")) or (type(player) == "table" and player.Level) or nil
+  local plRank   = (typeof(player) == "Instance" and player:GetAttribute("RankName")) or (type(player) == "table" and player.RankName) or nil
+  local rankInfo = getRankInfo(plRank)
+  local rankColor = rankInfo.Color
+
+  if Config.ESP_Box then
+    local c = customBoxCol
+    if Config.ESP_BoxStyle == "Corner" then
+      for _, l in ipairs(esp.box) do l.Visible = false end
+      local cl = math.floor(boxW * 0.25)
+      local ct = math.floor(boxH * 0.25)
+      esp.corners[1].From = Vector2.new(leftX, topY); esp.corners[1].To = Vector2.new(leftX + cl, topY)
+      esp.corners[2].From = Vector2.new(leftX, topY); esp.corners[2].To = Vector2.new(leftX, topY + ct)
+      esp.corners[3].From = Vector2.new(rightX, topY); esp.corners[3].To = Vector2.new(rightX - cl, topY)
+      esp.corners[4].From = Vector2.new(rightX, topY); esp.corners[4].To = Vector2.new(rightX, topY + ct)
+      esp.corners[5].From = Vector2.new(leftX, botY); esp.corners[5].To = Vector2.new(leftX + cl, botY)
+      esp.corners[6].From = Vector2.new(leftX, botY); esp.corners[6].To = Vector2.new(leftX, botY - ct)
+      esp.corners[7].From = Vector2.new(rightX, botY); esp.corners[7].To = Vector2.new(rightX - cl, botY)
+      esp.corners[8].From = Vector2.new(rightX, botY); esp.corners[8].To = Vector2.new(rightX, botY - ct)
+      for i = 1, 8 do esp.corners[i].Color = c; esp.corners[i].Visible = true end
+    else
+      for _, l in ipairs(esp.corners) do l.Visible = false end
+      esp.box[1].From = Vector2.new(leftX, topY); esp.box[1].To = Vector2.new(rightX, topY)
+      esp.box[2].From = Vector2.new(rightX, topY); esp.box[2].To = Vector2.new(rightX, botY)
+      esp.box[3].From = Vector2.new(rightX, botY); esp.box[3].To = Vector2.new(leftX, botY)
+      esp.box[4].From = Vector2.new(leftX, botY); esp.box[4].To = Vector2.new(leftX, topY)
+      for i = 1, 4 do esp.box[i].Color = c; esp.box[i].Visible = true end
+    end
+  else
+    for _, l in ipairs(esp.box) do l.Visible = false end
+    for _, l in ipairs(esp.corners) do l.Visible = false end
+  end
+
+  -- Name Line (Immediately above head/box)
+  if Config.ESP_Names then
+    local nameText = (player.DisplayName or player.Name or "Unknown") .. staffTag
+    local nameColor = staffEntry and staffEntry.color or customNameCol
+    if Config.ESP_Alerts and char then
+      local nowTime = workspace:GetServerTimeNow()
+      local prot = char:GetAttribute("ProtectedUntil")
+      local band = char:GetAttribute("BandageEnds")
+      local arm = char:GetAttribute("ArmorEnds")
+      if typeof(prot) == "number" and (prot - nowTime) > 0 then
+        nameText = nameText .. " [PROTECTED]"
+        nameColor = Color3.fromRGB(110, 200, 255)
+      elseif typeof(band) == "number" and (band - nowTime) > 0 then
+        nameText = nameText .. " [HEALING]"
+        nameColor = Color3.fromRGB(255, 220, 80)
+      elseif typeof(arm) == "number" and (arm - nowTime) > 0 then
+        nameText = nameText .. " [ARMORING]"
+        nameColor = Color3.fromRGB(255, 220, 80)
+      end
+      if Config.ESP_FiringAlert and ClientState and ClientState.ShotTimes then
+        local lastShot = ClientState.ShotTimes[char]
+        if type(lastShot) == "number" and (os.clock() - lastShot) < 0.35 then
+          nameText = nameText .. " [FIRING]"
+          nameColor = Color3.fromRGB(255, 85, 40)
+        end
+      end
+    end
+    esp.name.Text = nameText
+    esp.name.Position = Vector2.new(midX, topY - 14)
+    esp.name.Color = nameColor
+    esp.name.Visible = true
+  else
+    esp.name.Visible = false
+  end
+
+  -- Real In-Game Rank Badge + Big Lv.X (Size 15) + Exact Official Rank Color
+  local showRank = Config.ESP_Rank and plRank and plRank ~= ""
+  local showLevel = Config.ESP_Level and plLevel ~= nil
+
+  if showRank or showLevel then
+    local headerY = topY - (Config.ESP_Names and 32 or 16)
+    local lvlStr  = showLevel and ("Lv." .. tostring(plLevel)) or ""
+    local rkStr   = showRank and tostring(plRank) or ""
+
+    local lvlW   = showLevel and (#lvlStr * 8.5) or 0
+    local rkW    = showRank and (#rkStr * 7.2) or 0
+    local badgeW = (showRank and esp.badge) and 18 or 0
+    local gap    = 5
+    local totalW = (badgeW > 0 and (badgeW + gap) or 0) + (lvlW > 0 and (lvlW + gap) or 0) + rkW
+    local startX = midX - math.floor(totalW * 0.5)
+
+    local curX = startX
+    if badgeW > 0 and esp.badge then
+      esp.badge.Position = UDim2.fromOffset(math.floor(curX), math.floor(headerY - 1))
+      if esp.badgeInner then esp.badgeInner.ImageColor3 = rankColor end
+      esp.badge.Visible = true
+      curX = curX + badgeW + gap
+    elseif esp.badge then
+      esp.badge.Visible = false
+    end
+
+    if showLevel and esp.level then
+      esp.level.Text = lvlStr
+      esp.level.Size = 15
+      esp.level.Color = Color3.fromRGB(255, 235, 120) -- Prominent warm gold
+      esp.level.Position = Vector2.new(math.floor(curX), math.floor(headerY))
+      esp.level.Visible = true
+      curX = curX + lvlW + gap
+    elseif esp.level then
+      esp.level.Visible = false
+    end
+
+    if showRank and esp.rank then
+      esp.rank.Text = rkStr
+      esp.rank.Size = 13
+      esp.rank.Color = rankColor -- Official exact Rank Color!
+      esp.rank.Position = Vector2.new(math.floor(curX), math.floor(headerY + 1))
+      esp.rank.Visible = true
+    elseif esp.rank then
+      esp.rank.Visible = false
+    end
+  else
+    if esp.badge then esp.badge.Visible = false end
+    if esp.level then esp.level.Visible = false end
+    if esp.rank then esp.rank.Visible = false end
+  end
+
+  if Config.ESP_Distance then
+    esp.dist.Text = math.floor(dist3d) .. "m"
+    esp.dist.Position = Vector2.new(midX, botY + 2)
+    esp.dist.Color = customDistCol
+    esp.dist.Visible = true
+  else esp.dist.Visible = false end
+
+  if Config.ESP_Health then
+    local barH = math.floor(boxH * hpRatio)
+    esp.healthBg.From = Vector2.new(leftX - 5, topY); esp.healthBg.To = Vector2.new(leftX - 5, botY); esp.healthBg.Visible = true
+    esp.health.From = Vector2.new(leftX - 5, botY - barH); esp.health.To = Vector2.new(leftX - 5, botY)
+    esp.health.Color = hpColor; esp.health.Visible = true
+  else esp.health.Visible = false; esp.healthBg.Visible = false end
+
+  if Config.ESP_Head and head then
+    local hp, hOn = Camera:WorldToViewportPoint(head.Position)
+    if hOn and hp.Z > 0 then
+      esp.head.Position = Vector2.new(hp.X, hp.Y)
+      esp.head.Radius = math.clamp(boxW * 0.22, 2.5, 12)
+      esp.head.Color = customHeadCol
+      esp.head.Visible = true
+    else esp.head.Visible = false end
+  else esp.head.Visible = false end
+
+  if Config.ESP_Skeleton and dist3d < 220 then
+    -- Cache body part references to eliminate 28 FindFirstChild lookups per frame
+    local parts = esp._cachedParts
+    if not parts or esp._cachedChar ~= char then
+      parts = {}
+      for _, bone in ipairs(R15_BONES) do
+        parts[bone[1]] = char:FindFirstChild(bone[1])
+        parts[bone[2]] = char:FindFirstChild(bone[2])
+      end
+      esp._cachedParts = parts
+      esp._cachedChar = char
+    end
+
+    local camW, camH = Camera.ViewportSize.X, Camera.ViewportSize.Y
+    for i, bone in ipairs(R15_BONES) do
+      local p1 = parts[bone[1]]
+      local p2 = parts[bone[2]]
+      if p1 and p2 then
+        local s1, on1 = Camera:WorldToViewportPoint(p1.Position)
+        local s2, on2 = Camera:WorldToViewportPoint(p2.Position)
+        if s1.Z > 0 and s2.Z > 0 and (on1 or on2) and
+           s1.X >= -50 and s1.X <= camW + 50 and s1.Y >= -50 and s1.Y <= camH + 50 and
+           s2.X >= -50 and s2.X <= camW + 50 and s2.Y >= -50 and s2.Y <= camH + 50 then
+          esp.bones[i].From = Vector2.new(s1.X, s1.Y)
+          esp.bones[i].To   = Vector2.new(s2.X, s2.Y)
+          esp.bones[i].Color = customSkelCol
+          esp.bones[i].Visible = true
+        else esp.bones[i].Visible = false end
+      else esp.bones[i].Visible = false end
+    end
+  else
+    for _, b in ipairs(esp.bones) do b.Visible = false end
+  end
+
+  if Config.ESP_Tracers then
+    local vx, vy = Camera.ViewportSize.X, Camera.ViewportSize.Y
+    local origin = (Config.ESP_TracerOrigin == "Center" and Vector2.new(vx * 0.5, vy * 0.5))
+      or (Config.ESP_TracerOrigin == "Mouse" and getAimScreenCenter())
+      or Vector2.new(vx * 0.5, vy)
+    esp.tracers.From = origin
+    esp.tracers.To   = Vector2.new(midX, botY)
+    esp.tracers.Color = customTracerCol
+    esp.tracers.Visible = true
+  else esp.tracers.Visible = false end
 end
-
-if not Config.ESP_Master or not esp then hideESP(esp); return end
-
-if player == LP or (Config.ESP_TeamCheck and isTeammate(player)) then hideESP(esp); return end
-
-local char = player.Character
-
-if not char then hideESP(esp); return end
-
-local hum  = char:FindFirstChildOfClass("Humanoid")
-
-local hrp  = char:FindFirstChild("HumanoidRootPart")
-
-local head = char:FindFirstChild("Head")
-
-if not hum or hum.Health <= 0 or not hrp then hideESP(esp); return end
-
-local camPos = Camera.CFrame.Position
-
-local hrpPos = hrp.Position
-
-local dist3d = (hrpPos - camPos).Magnitude
-
-if dist3d > Config.ESP_MaxDistance then hideESP(esp); return end
-
-local headPos = (head and head.Position) or (hrpPos + Vector3.new(0, 1.5, 0))
-
-local topWorld = headPos + Vector3.new(0, 0.7, 0)
-
-local botWorld = hrpPos - Vector3.new(0, 3.0, 0)
-
-local topScreen, topOn = Camera:WorldToViewportPoint(topWorld)
-
-local botScreen, botOn = Camera:WorldToViewportPoint(botWorld)
-
-if topScreen.Z <= 0 or botScreen.Z <= 0 or (not topOn and not botOn) then
-
-hideESP(esp)
-
-return
-
-end
-
-local boxH = math.abs(botScreen.Y - topScreen.Y)
-
-if boxH < 3 or boxH > 4000 then hideESP(esp); return end
-
-local boxW = math.floor(boxH * 0.58)
-
-local midX = math.floor((topScreen.X + botScreen.X) * 0.5)
-
-local topY = math.floor(math.min(topScreen.Y, botScreen.Y))
-
-local botY = topY + boxH
-
-local leftX = math.floor(midX - (boxW * 0.5))
-
-local rightX = leftX + boxW
-
-local hpRatio = math.clamp(hum.Health / (hum.MaxHealth > 0 and hum.MaxHealth or 100), 0, 1)
-
-local hpColor = Color3.fromRGB(math.floor(255 * (1 - hpRatio)), math.floor(255 * hpRatio), 50)
-
-local staffEntry = State._staffInServer and State._staffInServer[player]
-
-local espBoxColor = staffEntry and staffEntry.color or C.accent
-
-local staffTag = staffEntry and (" [" .. staffEntry.text .. "]") or ""
-
-local customBoxCol    = getESPColor("box", espBoxColor)
-
-local customSkelCol   = getESPColor("skel", Color3.fromRGB(245, 245, 255))
-
-local customNameCol   = getESPColor("name", staffEntry and staffEntry.color or Color3.fromRGB(255, 255, 255))
-
-local customDistCol   = getESPColor("dist", Color3.fromRGB(180, 170, 200))
-
-local customTracerCol = getESPColor("tracer", C.accent)
-
-local customHeadCol   = getESPColor("head", C.accent)
-
-local plLevel  = (typeof(player) == "Instance" and player:GetAttribute("Level")) or (type(player) == "table" and player.Level) or nil
-
-local plRank   = (typeof(player) == "Instance" and player:GetAttribute("RankName")) or (type(player) == "table" and player.RankName) or nil
-
-local rankInfo = getRankInfo(plRank)
-
-local rankColor = rankInfo.Color
-
-if MOBILE_MODE then
-
-local r = esp.mRoot
-
-if not r then hideESP(esp); return end
-
-r.Visible = true
-
-r.Position = UDim2.fromOffset(leftX, topY)
-
-r.Size = UDim2.fromOffset(boxW, boxH)
-
-if Config.ESP_Box then
-
-if Config.ESP_BoxStyle == "Corner" then
-
-esp.mBox.Visible = false
-
-local cl = math.max(4, math.floor(boxW * 0.25))
-
-local ct = math.max(4, math.floor(boxH * 0.25))
-
-local mc = esp.mCorners
-
-mc[1].Position = UDim2.fromOffset(0, 0);                mc[1].Size = UDim2.fromOffset(cl, 2)
-
-mc[2].Position = UDim2.fromOffset(0, 0);                mc[2].Size = UDim2.fromOffset(2, ct)
-
-mc[3].Position = UDim2.fromOffset(boxW - cl, 0);        mc[3].Size = UDim2.fromOffset(cl, 2)
-
-mc[4].Position = UDim2.fromOffset(boxW - 2, 0);         mc[4].Size = UDim2.fromOffset(2, ct)
-
-mc[5].Position = UDim2.fromOffset(0, boxH - 2);         mc[5].Size = UDim2.fromOffset(cl, 2)
-
-mc[6].Position = UDim2.fromOffset(0, boxH - ct);        mc[6].Size = UDim2.fromOffset(2, ct)
-
-mc[7].Position = UDim2.fromOffset(boxW - cl, boxH - 2); mc[7].Size = UDim2.fromOffset(cl, 2)
-
-mc[8].Position = UDim2.fromOffset(boxW - 2, boxH - ct); mc[8].Size = UDim2.fromOffset(2, ct)
-
-for i = 1, 8 do mc[i].BackgroundColor3 = customBoxCol; mc[i].Visible = true end
-
-else
-
-for _, f in ipairs(esp.mCorners) do f.Visible = false end
-
-esp.mBox.Position = UDim2.fromOffset(0, 0)
-
-esp.mBox.Size = UDim2.fromOffset(boxW, boxH)
-
-local st = esp.mBox:FindFirstChildOfClass("UIStroke")
-
-if st then st.Color = customBoxCol end
-
-esp.mBox.Visible = true
-
-end
-
-else
-
-esp.mBox.Visible = false
-
-for _, f in ipairs(esp.mCorners) do f.Visible = false end
-
-end
-
-if Config.ESP_Names then
-
-local nameText = (player.DisplayName or player.Name or "Unknown") .. staffTag
-
-local nameColor = staffEntry and staffEntry.color or customNameCol
-
-if Config.ESP_Alerts and char then
-
-local nowTime = workspace:GetServerTimeNow()
-
-local prot = char:GetAttribute("ProtectedUntil")
-
-local band = char:GetAttribute("BandageEnds")
-
-local arm = char:GetAttribute("ArmorEnds")
-
-if typeof(prot) == "number" and (prot - nowTime) > 0 then
-
-nameText = nameText .. " [PROTECTED]"; nameColor = Color3.fromRGB(110, 200, 255)
-
-elseif typeof(band) == "number" and (band - nowTime) > 0 then
-
-nameText = nameText .. " [HEALING]"; nameColor = Color3.fromRGB(255, 220, 80)
-
-elseif typeof(arm) == "number" and (arm - nowTime) > 0 then
-
-nameText = nameText .. " [ARMORING]"; nameColor = Color3.fromRGB(255, 220, 80)
-
-end
-
-if Config.ESP_FiringAlert and ClientState and ClientState.ShotTimes then
-
-local lastShot = ClientState.ShotTimes[char]
-
-if type(lastShot) == "number" and (os.clock() - lastShot) < 0.35 then
-
-nameText = nameText .. " [FIRING]"; nameColor = Color3.fromRGB(255, 85, 40)
-
-end
-
-end
-
-end
-
-esp.mName.Text = nameText
-
-esp.mName.TextColor3 = nameColor
-
-esp.mName.Position = UDim2.fromOffset(math.floor(boxW * 0.5), -2)
-
-esp.mName.Visible = true
-
-else
-
-esp.mName.Visible = false
-
-end
-
-local showRank = Config.ESP_Rank and plRank and plRank ~= ""
-
-local showLevel = Config.ESP_Level and plLevel ~= nil
-
-if showRank or showLevel then
-
-local headerY = -(Config.ESP_Names and 34 or 18)
-
-local lvlStr  = showLevel and ("Lv." .. tostring(plLevel)) or ""
-
-local rkStr   = showRank and tostring(plRank) or ""
-
-local lvlW = showLevel and (#lvlStr * 8.5) or 0
-
-local rkW  = showRank and (#rkStr * 7.2) or 0
-
-local badgeW = (showRank and esp.badge) and 18 or 0
-
-local gap = 5
-
-local totalW = (badgeW > 0 and (badgeW + gap) or 0) + (lvlW > 0 and (lvlW + gap) or 0) + rkW
-
-local curX = math.floor(boxW * 0.5 - totalW * 0.5)
-
-local screenX = midX - math.floor(totalW * 0.5)
-
-if badgeW > 0 and esp.badge then
-
-esp.badge.Position = UDim2.fromOffset(screenX, topY + headerY - 1)
-
-if esp.badgeInner then esp.badgeInner.ImageColor3 = rankColor end
-
-esp.badge.Visible = true
-
-curX = curX + badgeW + gap
-
-screenX = screenX + badgeW + gap
-
-elseif esp.badge then
-
-esp.badge.Visible = false
-
-end
-
-if showLevel and esp.mLevel then
-
-esp.mLevel.Text = lvlStr
-
-esp.mLevel.TextColor3 = Color3.fromRGB(255, 235, 120)
-
-esp.mLevel.Position = UDim2.fromOffset(curX, headerY)
-
-esp.mLevel.Visible = true
-
-curX = curX + lvlW + gap
-
-screenX = screenX + lvlW + gap
-
-elseif esp.mLevel then
-
-esp.mLevel.Visible = false
-
-end
-
-if showRank and esp.mRank then
-
-esp.mRank.Text = rkStr
-
-esp.mRank.TextColor3 = rankColor
-
-esp.mRank.Position = UDim2.fromOffset(curX, headerY)
-
-esp.mRank.Visible = true
-
-elseif esp.mRank then
-
-esp.mRank.Visible = false
-
-end
-
-else
-
-if esp.badge then esp.badge.Visible = false end
-
-if esp.mLevel then esp.mLevel.Visible = false end
-
-if esp.mRank then esp.mRank.Visible = false end
-
-end
-
-if Config.ESP_Distance then
-
-esp.mDist.Text = math.floor(dist3d) .. "m"
-
-esp.mDist.TextColor3 = customDistCol
-
-esp.mDist.Position = UDim2.fromOffset(math.floor(boxW * 0.5), boxH + 2)
-
-esp.mDist.Visible = true
-
-else
-
-esp.mDist.Visible = false
-
-end
-
-if Config.ESP_Health then
-
-esp.mHpBg.Position = UDim2.fromOffset(-7, 0)
-
-esp.mHpBg.Size = UDim2.fromOffset(3, boxH)
-
-esp.mHpBg.Visible = true
-
-esp.mHp.Position = UDim2.fromOffset(-7, math.floor(boxH * (1 - hpRatio)))
-
-esp.mHp.Size = UDim2.fromOffset(3, math.max(1, math.floor(boxH * hpRatio)))
-
-esp.mHp.BackgroundColor3 = hpColor
-
-esp.mHp.Visible = true
-
-else
-
-esp.mHp.Visible = false
-
-esp.mHpBg.Visible = false
-
-end
-
-if Config.ESP_Head and head then
-
-local hp, hOn = Camera:WorldToViewportPoint(head.Position)
-
-if hOn and hp.Z > 0 then
-
-local r = math.clamp(boxW * 0.22, 2.5, 12)
-
-local d = math.max(r * 2, 4)
-
-esp.mHead.Position = UDim2.fromOffset(hp.X - leftX, hp.Y - topY)
-
-esp.mHead.Size = UDim2.fromOffset(d, d)
-
-local st = esp.mHead:FindFirstChildOfClass("UIStroke")
-
-if st then st.Color = customHeadCol end
-
-esp.mHead.Visible = true
-
-else
-
-esp.mHead.Visible = false
-
-end
-
-else
-
-esp.mHead.Visible = false
-
-end
-
-if Config.ESP_Skeleton and dist3d < 220 then
-
-local parts = esp._cachedParts
-
-if not parts or esp._cachedChar ~= char then
-
-parts = {}
-
-for _, bone in ipairs(R15_BONES) do
-
-parts[bone[1]] = char:FindFirstChild(bone[1])
-
-parts[bone[2]] = char:FindFirstChild(bone[2])
-
-end
-
-esp._cachedParts = parts
-
-esp._cachedChar = char
-
-end
-
-local camW, camH = Camera.ViewportSize.X, Camera.ViewportSize.Y
-
-for i, bone in ipairs(R15_BONES) do
-
-local p1 = parts[bone[1]]
-
-local p2 = parts[bone[2]]
-
-local bf = esp.mBones[i]
-
-if p1 and p2 and bf then
-
-local s1, on1 = Camera:WorldToViewportPoint(p1.Position)
-
-local s2, on2 = Camera:WorldToViewportPoint(p2.Position)
-
-if s1.Z > 0 and s2.Z > 0 and (on1 or on2)
-
-and s1.X >= -50 and s1.X <= camW + 50 and s1.Y >= -50 and s1.Y <= camH + 50
-
-and s2.X >= -50 and s2.X <= camW + 50 and s2.Y >= -50 and s2.Y <= camH + 50 then
-
-local dx, dy = s2.X - s1.X, s2.Y - s1.Y
-
-local len = math.max(math.sqrt(dx * dx + dy * dy), 1)
-
-bf.Size = UDim2.fromOffset(len, 1.5)
-
-bf.Position = UDim2.fromOffset((s1.X + s2.X) * 0.5 - leftX, (s1.Y + s2.Y) * 0.5 - topY)
-
-bf.Rotation = math.deg(math.atan2(dy, dx))
-
-bf.BackgroundColor3 = customSkelCol
-
-bf.Visible = true
-
-else
-
-bf.Visible = false
-
-end
-
-elseif bf then
-
-bf.Visible = false
-
-end
-
-end
-
-else
-
-for _, bf in ipairs(esp.mBones) do bf.Visible = false end
-
-end
-
-if Config.ESP_Tracers then
-
-local vx, vy = Camera.ViewportSize.X, Camera.ViewportSize.Y
-
-local ox, oy
-
-if Config.ESP_TracerOrigin == "Mouse" and getAimScreenCenter then
-
-local ac = getAimScreenCenter()
-
-ox, oy = ac.X, ac.Y
-
-elseif Config.ESP_TracerOrigin == "Center" then
-
-ox, oy = vx * 0.5, vy * 0.5
-
-else
-
-ox, oy = vx * 0.5, vy
-
-end
-
-local dx, dy = midX - ox, botY - oy
-
-local len = math.max(math.sqrt(dx * dx + dy * dy), 1)
-
-esp.mTracer.Size = UDim2.fromOffset(len, 1.2)
-
-esp.mTracer.Position = UDim2.fromOffset((ox + midX) * 0.5 - leftX, (oy + botY) * 0.5 - topY)
-
-esp.mTracer.Rotation = math.deg(math.atan2(dy, dx))
-
-esp.mTracer.BackgroundColor3 = customTracerCol
-
-esp.mTracer.Visible = true
-
-else
-
-esp.mTracer.Visible = false
-
-end
-
-return
-
-end
-
-if Config.ESP_Box then
-
-local c = customBoxCol
-
-if Config.ESP_BoxStyle == "Corner" then
-
-for _, l in ipairs(esp.box) do l.Visible = false end
-
-local cl = math.floor(boxW * 0.25)
-
-local ct = math.floor(boxH * 0.25)
-
-esp.corners[1].From = Vector2.new(leftX, topY); esp.corners[1].To = Vector2.new(leftX + cl, topY)
-
-esp.corners[2].From = Vector2.new(leftX, topY); esp.corners[2].To = Vector2.new(leftX, topY + ct)
-
-esp.corners[3].From = Vector2.new(rightX, topY); esp.corners[3].To = Vector2.new(rightX - cl, topY)
-
-esp.corners[4].From = Vector2.new(rightX, topY); esp.corners[4].To = Vector2.new(rightX, topY + ct)
-
-esp.corners[5].From = Vector2.new(leftX, botY); esp.corners[5].To = Vector2.new(leftX + cl, botY)
-
-esp.corners[6].From = Vector2.new(leftX, botY); esp.corners[6].To = Vector2.new(leftX, botY - ct)
-
-esp.corners[7].From = Vector2.new(rightX, botY); esp.corners[7].To = Vector2.new(rightX - cl, botY)
-
-esp.corners[8].From = Vector2.new(rightX, botY); esp.corners[8].To = Vector2.new(rightX, botY - ct)
-
-for i = 1, 8 do esp.corners[i].Color = c; esp.corners[i].Visible = true end
-
-else
-
-for _, l in ipairs(esp.corners) do l.Visible = false end
-
-esp.box[1].From = Vector2.new(leftX, topY); esp.box[1].To = Vector2.new(rightX, topY)
-
-esp.box[2].From = Vector2.new(rightX, topY); esp.box[2].To = Vector2.new(rightX, botY)
-
-esp.box[3].From = Vector2.new(rightX, botY); esp.box[3].To = Vector2.new(leftX, botY)
-
-esp.box[4].From = Vector2.new(leftX, botY); esp.box[4].To = Vector2.new(leftX, topY)
-
-for i = 1, 4 do esp.box[i].Color = c; esp.box[i].Visible = true end
-
-end
-
-else
-
-for _, l in ipairs(esp.box) do l.Visible = false end
-
-for _, l in ipairs(esp.corners) do l.Visible = false end
-
-end
-
-if Config.ESP_Names then
-
-local nameText = (player.DisplayName or player.Name or "Unknown") .. staffTag
-
-local nameColor = staffEntry and staffEntry.color or customNameCol
-
-if Config.ESP_Alerts and char then
-
-local nowTime = workspace:GetServerTimeNow()
-
-local prot = char:GetAttribute("ProtectedUntil")
-
-local band = char:GetAttribute("BandageEnds")
-
-local arm = char:GetAttribute("ArmorEnds")
-
-if typeof(prot) == "number" and (prot - nowTime) > 0 then
-
-nameText = nameText .. " [PROTECTED]"
-
-nameColor = Color3.fromRGB(110, 200, 255)
-
-elseif typeof(band) == "number" and (band - nowTime) > 0 then
-
-nameText = nameText .. " [HEALING]"
-
-nameColor = Color3.fromRGB(255, 220, 80)
-
-elseif typeof(arm) == "number" and (arm - nowTime) > 0 then
-
-nameText = nameText .. " [ARMORING]"
-
-nameColor = Color3.fromRGB(255, 220, 80)
-
-end
-
-if Config.ESP_FiringAlert and ClientState and ClientState.ShotTimes then
-
-local lastShot = ClientState.ShotTimes[char]
-
-if type(lastShot) == "number" and (os.clock() - lastShot) < 0.35 then
-
-nameText = nameText .. " [FIRING]"
-
-nameColor = Color3.fromRGB(255, 85, 40)
-
-end
-
-end
-
-end
-
-esp.name.Text = nameText
-
-esp.name.Position = Vector2.new(midX, topY - 14)
-
-esp.name.Color = nameColor
-
-esp.name.Visible = true
-
-else
-
-esp.name.Visible = false
-
-end
-
-local showRank = Config.ESP_Rank and plRank and plRank ~= ""
-
-local showLevel = Config.ESP_Level and plLevel ~= nil
-
-if showRank or showLevel then
-
-local headerY = topY - (Config.ESP_Names and 32 or 16)
-
-local lvlStr  = showLevel and ("Lv." .. tostring(plLevel)) or ""
-
-local rkStr   = showRank and tostring(plRank) or ""
-
-local lvlW   = showLevel and (#lvlStr * 8.5) or 0
-
-local rkW    = showRank and (#rkStr * 7.2) or 0
-
-local badgeW = (showRank and esp.badge) and 18 or 0
-
-local gap    = 5
-
-local totalW = (badgeW > 0 and (badgeW + gap) or 0) + (lvlW > 0 and (lvlW + gap) or 0) + rkW
-
-local startX = midX - math.floor(totalW * 0.5)
-
-local curX = startX
-
-if badgeW > 0 and esp.badge then
-
-esp.badge.Position = UDim2.fromOffset(math.floor(curX), math.floor(headerY - 1))
-
-if esp.badgeInner then esp.badgeInner.ImageColor3 = rankColor end
-
-esp.badge.Visible = true
-
-curX = curX + badgeW + gap
-
-elseif esp.badge then
-
-esp.badge.Visible = false
-
-end
-
-if showLevel and esp.level then
-
-esp.level.Text = lvlStr
-
-esp.level.Size = 15
-
-esp.level.Color = Color3.fromRGB(255, 235, 120) 
-
-esp.level.Position = Vector2.new(math.floor(curX), math.floor(headerY))
-
-esp.level.Visible = true
-
-curX = curX + lvlW + gap
-
-elseif esp.level then
-
-esp.level.Visible = false
-
-end
-
-if showRank and esp.rank then
-
-esp.rank.Text = rkStr
-
-esp.rank.Size = 13
-
-esp.rank.Color = rankColor 
-
-esp.rank.Position = Vector2.new(math.floor(curX), math.floor(headerY + 1))
-
-esp.rank.Visible = true
-
-elseif esp.rank then
-
-esp.rank.Visible = false
-
-end
-
-else
-
-if esp.badge then esp.badge.Visible = false end
-
-if esp.level then esp.level.Visible = false end
-
-if esp.rank then esp.rank.Visible = false end
-
-end
-
-if Config.ESP_Distance then
-
-esp.dist.Text = math.floor(dist3d) .. "m"
-
-esp.dist.Position = Vector2.new(midX, botY + 2)
-
-esp.dist.Color = customDistCol
-
-esp.dist.Visible = true
-
-else esp.dist.Visible = false end
-
-if Config.ESP_Health then
-
-local barH = math.floor(boxH * hpRatio)
-
-esp.healthBg.From = Vector2.new(leftX - 5, topY); esp.healthBg.To = Vector2.new(leftX - 5, botY); esp.healthBg.Visible = true
-
-esp.health.From = Vector2.new(leftX - 5, botY - barH); esp.health.To = Vector2.new(leftX - 5, botY)
-
-esp.health.Color = hpColor; esp.health.Visible = true
-
-else esp.health.Visible = false; esp.healthBg.Visible = false end
-
-if Config.ESP_Head and head then
-
-local hp, hOn = Camera:WorldToViewportPoint(head.Position)
-
-if hOn and hp.Z > 0 then
-
-esp.head.Position = Vector2.new(hp.X, hp.Y)
-
-esp.head.Radius = math.clamp(boxW * 0.22, 2.5, 12)
-
-esp.head.Color = customHeadCol
-
-esp.head.Visible = true
-
-else esp.head.Visible = false end
-
-else esp.head.Visible = false end
-
-if Config.ESP_Skeleton and dist3d < 220 then
-
-local parts = esp._cachedParts
-
-if not parts or esp._cachedChar ~= char then
-
-parts = {}
-
-for _, bone in ipairs(R15_BONES) do
-
-parts[bone[1]] = char:FindFirstChild(bone[1])
-
-parts[bone[2]] = char:FindFirstChild(bone[2])
-
-end
-
-esp._cachedParts = parts
-
-esp._cachedChar = char
-
-end
-
-local camW, camH = Camera.ViewportSize.X, Camera.ViewportSize.Y
-
-for i, bone in ipairs(R15_BONES) do
-
-local p1 = parts[bone[1]]
-
-local p2 = parts[bone[2]]
-
-if p1 and p2 then
-
-local s1, on1 = Camera:WorldToViewportPoint(p1.Position)
-
-local s2, on2 = Camera:WorldToViewportPoint(p2.Position)
-
-if s1.Z > 0 and s2.Z > 0 and (on1 or on2) and
-
-s1.X >= -50 and s1.X <= camW + 50 and s1.Y >= -50 and s1.Y <= camH + 50 and
-
-s2.X >= -50 and s2.X <= camW + 50 and s2.Y >= -50 and s2.Y <= camH + 50 then
-
-esp.bones[i].From = Vector2.new(s1.X, s1.Y)
-
-esp.bones[i].To   = Vector2.new(s2.X, s2.Y)
-
-esp.bones[i].Color = customSkelCol
-
-esp.bones[i].Visible = true
-
-else esp.bones[i].Visible = false end
-
-else esp.bones[i].Visible = false end
-
-end
-
-else
-
-for _, b in ipairs(esp.bones) do b.Visible = false end
-
-end
-
-if Config.ESP_Tracers then
-
-local vx, vy = Camera.ViewportSize.X, Camera.ViewportSize.Y
-
-local origin = (Config.ESP_TracerOrigin == "Center" and Vector2.new(vx * 0.5, vy * 0.5))
-
-or (Config.ESP_TracerOrigin == "Mouse" and getAimScreenCenter())
-
-or Vector2.new(vx * 0.5, vy)
-
-esp.tracers.From = origin
-
-esp.tracers.To   = Vector2.new(midX, botY)
-
-esp.tracers.Color = customTracerCol
-
-esp.tracers.Visible = true
-
-else esp.tracers.Visible = false end
-
-end
-
-local _hlCache = {}  
-
-local function getHLColor(prefix)
-
-local r = Config["hl_col_" .. prefix .. "_r"]
-
-local g = Config["hl_col_" .. prefix .. "_g"]
-
-local b = Config["hl_col_" .. prefix .. "_b"]
-
-if r and g and b then
-
-return Color3.fromRGB(math.clamp(r,0,255), math.clamp(g,0,255), math.clamp(b,0,255))
-
-end
-
-return C.accent
-
-end
-
-local function removeHL(player)
-
-local hl = _hlCache[player]
-
-if hl then
-
-pcall(function() hl:Destroy() end)
-
-_hlCache[player] = nil
-
-end
-
-end
-
-local function applyHL(player)
-
-if not player or player == LP then return end
-
-if Config.HighlightTeamCheck and isTeammate(player) then
-
-removeHL(player)
-
-return
-
-end
-
-local char = player.Character
-
-if not char then removeHL(player); return end
-
-local existing = _hlCache[player]
-
-if existing then
-
-if existing.Adornee == char and existing.Parent then
-
-existing.OutlineColor = getHLColor("outline")
-
-existing.FillColor    = getHLColor("fill")
-
-existing.FillTransparency    = Config.hl_fill_transparency
-
-existing.OutlineTransparency = Config.hl_outline_transparency
-
-existing.DepthMode = (Config.HighlightDepthMode == "Occluded")
-
-and Enum.HighlightDepthMode.Occluded
-
-or  Enum.HighlightDepthMode.AlwaysOnTop
-
-return
-
-else
-
-pcall(function() existing:Destroy() end)
-
-_hlCache[player] = nil
-
-end
-
-end
-
-local hl = Instance.new("Highlight")
-
-hl.Name                 = "TK4_Highlight"
-
-hl.Adornee              = char
-
-hl.OutlineColor         = getHLColor("outline")
-
-hl.FillColor            = getHLColor("fill")
-
-hl.FillTransparency     = Config.hl_fill_transparency
-
-hl.OutlineTransparency  = Config.hl_outline_transparency
-
-hl.DepthMode            = (Config.HighlightDepthMode == "Occluded")
-
-and Enum.HighlightDepthMode.Occluded
-
-or  Enum.HighlightDepthMode.AlwaysOnTop
-
-pcall(function()
-
-hl.Parent = char  
-
-end)
-
-_hlCache[player] = hl
-
-end
-
-local function refreshAllHighlights()
-
-if not Config.HighlightEnabled then
-
-for pl, hl in pairs(_hlCache) do
-
-pcall(function() hl:Destroy() end)
-
-_hlCache[pl] = nil
-
-end
-
-return
-
-end
-
-for _, pl in ipairs(Players:GetPlayers()) do
-
-if pl ~= LP then
-
-applyHL(pl)
-
-end
-
-end
-
-for pl in pairs(_hlCache) do
-
-if not pl.Parent then
-
-pcall(function() _hlCache[pl]:Destroy() end)
-
-_hlCache[pl] = nil
-
-end
-
-end
-
-end
-
-regConn(Players.PlayerAdded:Connect(function(pl)
-
-pl.CharacterAdded:Connect(function()
-
-task.wait(0.1)
-
-if Config.HighlightEnabled then applyHL(pl) end
-
-end)
-
-end))
-
-for _, pl in ipairs(Players:GetPlayers()) do
-
-if pl ~= LP then
-
-pl.CharacterAdded:Connect(function()
-
-task.wait(0.1)
-
-if Config.HighlightEnabled then applyHL(pl) end
-
-end)
-
-end
-
-end
-
-regConn(Players.PlayerRemoving:Connect(function(pl) removeHL(pl) end))
-
-task.spawn(function()
-
-while GStore.TK4_SCRIPT_ID == SCRIPT_ID do
-
-pcall(refreshAllHighlights)
-
-task.wait(0.1)
-
-end
-
-end)
 
 local CrosshairLines = {}
-
-if HasDrawing and not MOBILE_MODE then
-
-for i = 1, 4 do
-
-CrosshairLines[i] = Drawing.new("Line")
-
-CrosshairLines[i].Thickness = Config.Crosshair_Thick
-
-CrosshairLines[i].Color = C.accent
-
-CrosshairLines[i].Visible = false
-
-end
-
+if HasDrawing then
+  for i = 1, 4 do
+    CrosshairLines[i] = Drawing.new("Line")
+    CrosshairLines[i].Thickness = Config.Crosshair_Thick
+    CrosshairLines[i].Color = C.accent
+    CrosshairLines[i].Visible = false
+  end
 end
 
 local function updateCrosshair()
 
-if not HasDrawing or MOBILE_MODE or not Config.Crosshair_Enabled then
+if not HasDrawing or not Config.Crosshair_Enabled then
 
 for _, l in ipairs(CrosshairLines) do l.Visible = false end
 
@@ -9036,6 +7925,46 @@ end
 elseif State.ESPCache[bot] then
 
 hideESP(State.ESPCache[bot])
+
+end
+
+end
+
+end
+
+local targetsFolder = workspace:FindFirstChild("Targets")
+
+if targetsFolder then
+
+for _, dummy in ipairs(targetsFolder:GetChildren()) do
+
+local dHum = dummy:FindFirstChildOfClass("Humanoid")
+
+if dHum and dHum.Health > 0 then
+
+if not State.ESPCache[dummy] then
+
+local pseudo = { Name = dummy.Name, DisplayName = dummy.Name, Character = dummy, IsBot = true }
+
+State.ESPCache[dummy] = createESP(pseudo)
+
+State.ESPCache[dummy]._pseudo = pseudo
+
+end
+
+local pseudo = State.ESPCache[dummy]._pseudo
+
+updateESP(pseudo, State.ESPCache[dummy])
+
+elseif State.ESPCache[dummy] then
+
+hideESP(State.ESPCache[dummy])
+
+end
+
+elseif State.ESPCache[dummy] then
+
+hideESP(State.ESPCache[dummy])
 
 end
 
