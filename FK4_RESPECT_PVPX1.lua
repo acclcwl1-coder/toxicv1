@@ -190,7 +190,6 @@ CMStrafe           = true,    -- CM: Enemy-relative Left/Right Strafe
 CMChase            = true,    -- CM: Auto chase toward enemy
 CMChaseDistance    = 50,      -- CM: Ideal orbit distance (studs)
 CMOrbit            = true,    -- CM: Smart orbital movement around enemy
-CMAutoCamera       = true,    -- CM: Auto rotate camera to target behind you
 AutoReload         = false,   -- Auto Spam Recharge on empty
 InfiniteAmmo       = false,   -- Smart Adaptive Infinite Ammo (Never exceeds legal gun mag)
 InfiniteStamina    = false,
@@ -3553,7 +3552,6 @@ makeStepperRow(p0, "Fly Max Height", Config.CMFlyHeight, 15, 80, 5, function(n) 
 makeToggleRow(p0, "Enemy Target Strafe", Config.CMStrafe, function(on) Config.CMStrafe = on end, "CMStrafe")
 makeToggleRow(p0, "Auto Chase Enemy", Config.CMChase, function(on) Config.CMChase = on end, "CMChase")
 makeStepperRow(p0, "Orbit Distance", Config.CMChaseDistance, 20, 100, 5, function(n) Config.CMChaseDistance = n end, "CMChaseDistance")
-makeToggleRow(p0, "Auto Camera to Target", Config.CMAutoCamera, function(on) Config.CMAutoCamera = on end, "CMAutoCamera")
 makeToggleRow(p0, "Auto Spam Recharge", Config.AutoReload, function(on) Config.AutoReload = on end, "AutoReload")
 local p1 = addSub("Silent Aim")
 makeToggleRow(p1, "Silent Aim", Config.SilentAim, function(on) Config.SilentAim = on end, "SilentAim")
@@ -4361,18 +4359,6 @@ local okS, tPart, tPlr = pcall(findSilentTarget)
 if okS then
 State.SilentTarget = tPart
 State.CachedTarget = tPlr
-if (Config.CMAutoCamera or (Config.CombatMaster and Config.CMChase)) and State.SilentTarget and not Config.GuiVisible and Camera then
-  local camPos = Camera.CFrame.Position
-  local targetPos = State.SilentTarget.Position
-  local toTarget = (targetPos - camPos).Unit
-  local lookDir = Camera.CFrame.LookVector
-  local dot = lookDir:Dot(toTarget)
-  if dot < 0.92 then
-    local desiredCF = CFrame.lookAt(camPos, targetPos)
-    local turnSpeed = math.clamp(dt * 14, 0.12, 0.45)
-    Camera.CFrame = Camera.CFrame:Lerp(desiredCF, turnSpeed)
-  end
-end
 end
 end
 else
