@@ -1148,7 +1148,7 @@ local HasDrawing = pcall(function() return Drawing ~= nil and Drawing.new ~= nil
 local MOBILE_MODE = (UserInputService.TouchEnabled and not UserInputService.MouseEnabled) or (not HasDrawing)
 local FOVCircle = nil
 
-if HasDrawing then
+if HasDrawing and not MOBILE_MODE then
   -- Clean up any stale FOVCircle from a previous execute
   pcall(function()
     if GStore._TK4_FOVCircle then GStore._TK4_FOVCircle:Remove() end
@@ -1331,6 +1331,50 @@ local function createESP(player)
     hpF.Visible = false
     hpF.Parent = root
     esp.mHp = hpF
+
+    -- Head circle (mobile)
+    local mHead = Instance.new("Frame")
+    mHead.Name = "MHead"
+    mHead.AnchorPoint = Vector2.new(0.5, 0.5)
+    mHead.BackgroundTransparency = 1
+    mHead.BorderSizePixel = 0
+    mHead.Visible = false
+    mHead.ZIndex = 8
+    mHead.Parent = root
+    local mHeadStroke = Instance.new("UIStroke")
+    mHeadStroke.Thickness = 1.5
+    mHeadStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    mHeadStroke.Color = Color3.new(1, 1, 1)
+    mHeadStroke.Parent = mHead
+    local mHeadCorner = Instance.new("UICorner")
+    mHeadCorner.CornerRadius = UDim.new(1, 0)
+    mHeadCorner.Parent = mHead
+    esp.mHead = mHead
+
+    -- Skeleton bones (mobile): thin rotated frames
+    esp.mBones = {}
+    for i = 1, #R15_BONES do
+      local bf = Instance.new("Frame")
+      bf.Name = "MB" .. i
+      bf.AnchorPoint = Vector2.new(0.5, 0.5)
+      bf.BorderSizePixel = 0
+      bf.BackgroundColor3 = Color3.fromRGB(245, 245, 255)
+      bf.Visible = false
+      bf.ZIndex = 7
+      bf.Parent = root
+      esp.mBones[i] = bf
+    end
+
+    -- Tracer line (mobile)
+    local mTracer = Instance.new("Frame")
+    mTracer.Name = "MTracer"
+    mTracer.AnchorPoint = Vector2.new(0.5, 0.5)
+    mTracer.BorderSizePixel = 0
+    mTracer.BackgroundColor3 = Color3.new(1, 1, 1)
+    mTracer.Visible = false
+    mTracer.ZIndex = 6
+    mTracer.Parent = root
+    esp.mTracer = mTracer
   end
 
   -- Real In-Game Rank Badge Icon from Respect PVP Templates (3-layer composite: Base, Inner, Gem)
@@ -1559,11 +1603,16 @@ local function updateESP(player, esp)
       local gap = 5
       local totalW = (badgeW > 0 and (badgeW + gap) or 0) + (lvlW > 0 and (lvlW + gap) or 0) + rkW
       local curX = math.floor(boxW * 0.5 - totalW * 0.5)
+      -- FIX: the badge is parented to ESPGui (full-screen), so it needs REAL
+      -- screen coords, not box-relative ones. Before this fix it was placed
+      -- at y = -35 -> rendered off-screen on mobile.
+      local screenX = midX - math.floor(totalW * 0.5)
       if badgeW > 0 and esp.badge then
-        esp.badge.Position = UDim2.fromOffset(curX, headerY - 1)
+        esp.badge.Position = UDim2.fromOffset(screenX, topY + headerY - 1)
         if esp.badgeInner then esp.badgeInner.ImageColor3 = rankColor end
         esp.badge.Visible = true
         curX = curX + badgeW + gap
+        screenX = screenX + badgeW + gap
       elseif esp.badge then
         esp.badge.Visible = false
       end
@@ -1573,6 +1622,7 @@ local function updateESP(player, esp)
         esp.mLevel.Position = UDim2.fromOffset(curX, headerY)
         esp.mLevel.Visible = true
         curX = curX + lvlW + gap
+        screenX = screenX + lvlW + gap
       elseif esp.mLevel then
         esp.mLevel.Visible = false
       end
@@ -1610,6 +1660,88 @@ local function updateESP(player, esp)
     else
       esp.mHp.Visible = false
       esp.mHpBg.Visible = false
+    end
+
+    -- Head circle (mobile) — same projection as PC
+    if Config.ESP_Head and head then
+      local hp, hOn = Camera:WorldToViewportPoint(head.Position)
+      if hOn and hp.Z > 0 then
+        local r = math.clamp(boxW * 0.22, 2.5, 12)
+        local d = math.max(r * 2, 4)
+        esp.mHead.Position = UDim2.fromOffset(hp.X - leftX, hp.Y - topY)
+        esp.mHead.Size = UDim2.fromOffset(d, d)
+        local st = esp.mHead:FindFirstChildOfClass("UIStroke")
+        if st then st.Color = customHeadCol end
+        esp.mHead.Visible = true
+      else
+        esp.mHead.Visible = false
+      end
+    else
+      esp.mHead.Visible = false
+    end
+
+    -- Skeleton (mobile) — same bone projection as PC, drawn as thin frames
+    if Config.ESP_Skeleton and dist3d < 220 then
+      local parts = esp._cachedParts
+      if not parts or esp._cachedChar ~= char then
+        parts = {}
+        for _, bone in ipairs(R15_BONES) do
+          parts[bone[1]] = char:FindFirstChild(bone[1])
+          parts[bone[2]] = char:FindFirstChild(bone[2])
+        end
+        esp._cachedParts = parts
+        esp._cachedChar = char
+      end
+      local camW, camH = Camera.ViewportSize.X, Camera.ViewportSize.Y
+      for i, bone in ipairs(R15_BONES) do
+        local p1 = parts[bone[1]]
+        local p2 = parts[bone[2]]
+        local bf = esp.mBones[i]
+        if p1 and p2 and bf then
+          local s1, on1 = Camera:WorldToViewportPoint(p1.Position)
+          local s2, on2 = Camera:WorldToViewportPoint(p2.Position)
+          if s1.Z > 0 and s2.Z > 0 and (on1 or on2)
+             and s1.X >= -50 and s1.X <= camW + 50 and s1.Y >= -50 and s1.Y <= camH + 50
+             and s2.X >= -50 and s2.X <= camW + 50 and s2.Y >= -50 and s2.Y <= camH + 50 then
+            local dx, dy = s2.X - s1.X, s2.Y - s1.Y
+            local len = math.max(math.sqrt(dx * dx + dy * dy), 1)
+            bf.Size = UDim2.fromOffset(len, 1.5)
+            bf.Position = UDim2.fromOffset((s1.X + s2.X) * 0.5 - leftX, (s1.Y + s2.Y) * 0.5 - topY)
+            bf.Rotation = math.deg(math.atan2(dy, dx))
+            bf.BackgroundColor3 = customSkelCol
+            bf.Visible = true
+          else
+            bf.Visible = false
+          end
+        elseif bf then
+          bf.Visible = false
+        end
+      end
+    else
+      for _, bf in ipairs(esp.mBones) do bf.Visible = false end
+    end
+
+    -- Tracers (mobile) — same origin logic as PC
+    if Config.ESP_Tracers then
+      local vx, vy = Camera.ViewportSize.X, Camera.ViewportSize.Y
+      local ox, oy
+      if Config.ESP_TracerOrigin == "Mouse" and getAimScreenCenter then
+        local ac = getAimScreenCenter()
+        ox, oy = ac.X, ac.Y
+      elseif Config.ESP_TracerOrigin == "Center" then
+        ox, oy = vx * 0.5, vy * 0.5
+      else
+        ox, oy = vx * 0.5, vy
+      end
+      local dx, dy = midX - ox, botY - oy
+      local len = math.max(math.sqrt(dx * dx + dy * dy), 1)
+      esp.mTracer.Size = UDim2.fromOffset(len, 1.2)
+      esp.mTracer.Position = UDim2.fromOffset((ox + midX) * 0.5 - leftX, (oy + botY) * 0.5 - topY)
+      esp.mTracer.Rotation = math.deg(math.atan2(dy, dx))
+      esp.mTracer.BackgroundColor3 = customTracerCol
+      esp.mTracer.Visible = true
+    else
+      esp.mTracer.Visible = false
     end
 
     return
@@ -1923,7 +2055,7 @@ task.spawn(function()
 end)
 
 local CrosshairLines = {}
-if HasDrawing then
+if HasDrawing and not MOBILE_MODE then
   for i = 1, 4 do
     CrosshairLines[i] = Drawing.new("Line")
     CrosshairLines[i].Thickness = Config.Crosshair_Thick
@@ -1933,7 +2065,7 @@ if HasDrawing then
 end
 
 local function updateCrosshair()
-  if not HasDrawing or not Config.Crosshair_Enabled then
+  if not HasDrawing or MOBILE_MODE or not Config.Crosshair_Enabled then
     for _, l in ipairs(CrosshairLines) do l.Visible = false end
     return
   end
