@@ -1033,12 +1033,8 @@ return char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
 end
 end
 local function getAimScreenCenter()
-local isTouch = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
-if isTouch then
-local vp = (Camera and Camera.ViewportSize) or Vector2.new(1366, 768)
-return Vector2.new(vp.X / 2, vp.Y / 2)
-end
-return UserInputService:GetMouseLocation()
+  local vp = (Camera and Camera.ViewportSize) or Vector2.new(1366, 768)
+  return Vector2.new(vp.X / 2, vp.Y / 2)
 end
 local function findSilentTarget()
 if not Config.SilentAim then return nil, nil end
@@ -1116,11 +1112,13 @@ local toTarget = targetPos - origin
 args[2] = toTarget.Unit
 args[4] = targetPos
 args[5] = -toTarget.Unit
+if args[7] then args[7] = toTarget.Unit end
 else
 args[4] = targetPos
 args[5] = Vector3.new(0, 1, 0)
 end
 args[3] = targetPart
+if args[8] then args[8] = 0 end
 State.ShotsHooked = State.ShotsHooked + 1
 State.LastShotTarget = targetPlayer
 State.LastShotTime = os.clock()
