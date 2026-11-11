@@ -170,6 +170,7 @@ RapidFire          = false,
 RapidMultiplier    = 2.0,
 FullAuto           = false,
 CombatMaster       = false,   -- Master God Mode Combo
+CMBodyRotate       = true,    -- CM: rotate body toward target (no camera = no detection)
 AutoReload         = false,   -- Auto Spam Recharge on empty
 InfiniteAmmo       = false,   -- Smart Adaptive Infinite Ammo (Never exceeds legal gun mag)
 InfiniteStamina    = false,
@@ -3583,6 +3584,7 @@ local aimFrame = makeMainTabFrame("AIM")
 local addSub   = makeSubSystem(aimFrame)
 local p0 = addSub("Combat Master")
 makeToggleRow(p0, "Combat Master (God Combo)", Config.CombatMaster, function(on) setCombatMaster(on) end, "CombatMaster")
+makeToggleRow(p0, "Body Rotate to Target", Config.CMBodyRotate, function(on) Config.CMBodyRotate = on end, "CMBodyRotate")
 makeToggleRow(p0, "Auto Spam Recharge", Config.AutoReload, function(on) Config.AutoReload = on end, "AutoReload")
 local p1 = addSub("Silent Aim")
 makeToggleRow(p1, "Silent Aim", Config.SilentAim, function(on) Config.SilentAim = on end, "SilentAim")
@@ -4203,6 +4205,27 @@ do
   _cmRayParams.FilterType = Enum.RaycastFilterType.Exclude
   _cmRayParams.IgnoreWater = true
 
+  -- RESPAWN CLEAN RESET: when character respawns, reset all jump/strafe state
+  -- so the system starts fresh with no leftover velocity or cycle timers.
+  regConn(LP.CharacterAdded:Connect(function()
+    _cmJumpCycleAt  = 0
+    _cmStrafeSwapAt = 0
+    _cmStrafeDir    = 1
+    -- Small delay so the character fully loads before CM fly resumes
+    task.wait(0.3)
+    if Config.CombatMaster and Config.CMFly then
+      local c = LP.Character
+      local h = c and c:FindFirstChildOfClass("Humanoid")
+      local r = c and c:FindFirstChild("HumanoidRootPart")
+      if h and r and h.Health > 0 then
+        -- Clear any residual velocity from before death
+        pcall(function()
+          r.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        end)
+      end
+    end
+  end))
+
   local function getStrafeEnemy(myPos)
     if State.SilentTarget and State.SilentTarget.Parent then
       local hrp = State.SilentTarget.Parent:FindFirstChild("HumanoidRootPart")
@@ -4339,6 +4362,33 @@ do
           hrp.AssemblyLinearVelocity = Vector3.new(v.X * 0.9, v.Y * 0.4, v.Z * 0.9)
         end
       end
+    end)
+  end))
+
+  -- ── BODY ROTATION: face target while CM is ON (no camera touch = no detection) ──
+  -- Rotates only HumanoidRootPart toward the locked target.
+  -- Camera never moves, server sees normal character movement.
+  local _cmRotAt = 0
+  regConn(RunService.Heartbeat:Connect(function()
+    if not Config.CombatMaster then return end
+    if not Config.CMBodyRotate then return end
+    local now = os.clock()
+    if now - _cmRotAt < 0.05 then return end   -- 20Hz is plenty
+    _cmRotAt = now
+    pcall(function()
+      local char = LP.Character
+      local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+      if not hrp then return end
+      -- Use silent aim target first, fallback to any visible enemy
+      local enemyHrp = getStrafeEnemy(hrp.Position)
+      if not enemyHrp then return end
+      local origin    = hrp.Position
+      local targetPos = enemyHrp.Position
+      local flat = Vector3.new(targetPos.X, origin.Y, targetPos.Z)
+      if (flat - origin).Magnitude < 0.5 then return end
+      local targetCF = CFrame.lookAt(origin, flat)
+      -- Smooth lerp: 0.18 = fast enough to track, not an instant snap
+      hrp.CFrame = hrp.CFrame:Lerp(targetCF, 0.18)
     end)
   end))
 
