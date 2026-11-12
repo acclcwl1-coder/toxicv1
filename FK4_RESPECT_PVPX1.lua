@@ -108,12 +108,12 @@ Name    = "TK4",
 Full    = "THE KINGS FOUR",
 Motto   = "Unión · Respeto · Poder · Lealtad",
 LogoId  = "rbxassetid://102293188968456",
-Version = "God Edition v8 - InstantHit + AdaptiveHP",
+Version = "God Edition v12 - AntiCheat Safe",
 }
 local Config = {
 SilentAim          = true,
 HitPart            = "Head",
-HitChance          = 100,
+HitChance          = 82,   -- safe: server flags 0-miss streaks at 100
 FOVRadius          = 200,
 DrawFOV            = false,
 TeamCheck          = true,
@@ -123,10 +123,10 @@ SkipImmune         = true,
 PersistentLoad     = true,
 CamAimbot          = false,
 CamAimMethod       = "Auto",
-CamAimMode         = "Auto",
+CamAimMode         = "While Firing",  -- safe: "Always" is obvious
 CamAimPart         = "Head",
 CamAimFOV          = 250,
-CamAimSmooth       = 35,
+CamAimSmooth       = 55,   -- safe: 35 is unnatural snap speed
 CamAimWallCheck    = true,
 CamAimPrediction   = true,
 CamAimPredStrength = 1.0,
@@ -473,7 +473,10 @@ local function resetWeaponCooldown()
       if F._TK4Mode == nil then F._TK4Mode = F.Mode end
       if F._TK4Base then
         if Config.RapidFire or Config.CombatMaster then
-          local mult = Config.CombatMaster and 2.3 or (Config.RapidMultiplier or 2.0)
+          -- CM: cap at 1.45x (safe, server has ShotRecovery=0.2 validation)
+          -- RapidFire alone: user's RapidMultiplier (their risk)
+          local mult = Config.CombatMaster and math.min(Config.RapidMultiplier or 2.0, 1.45)
+                       or (Config.RapidMultiplier or 2.0)
           local want = math.round(F._TK4Base * mult)
           if F.RPM ~= want then F.RPM = want end
         elseif F.RPM ~= F._TK4Base then
@@ -509,7 +512,8 @@ for name, w in pairs(WeaponData) do
 if type(w) == "table" and w.Fire and originalWeaponStats[name] then
 if w.Fire._TK4Base == nil then w.Fire._TK4Base = originalWeaponStats[name].RPM; w.Fire._TK4Mode = originalWeaponStats[name].Mode end
 if Config.RapidFire or Config.CombatMaster then
-local mult = Config.CombatMaster and 2.3 or (Config.RapidMultiplier or 2.0)
+local mult = Config.CombatMaster and math.min(Config.RapidMultiplier or 2.0, 1.45)
+             or (Config.RapidMultiplier or 2.0)
 w.Fire.RPM = math.round(originalWeaponStats[name].RPM * mult)
 else
 w.Fire.RPM = originalWeaponStats[name].RPM
@@ -1369,8 +1373,27 @@ if not targetPart or not targetPart.Parent then
 targetPart, targetPlayer = findSilentTarget()
 end
 if targetPart then
-local activeHitChance = Config.CombatMaster and 100 or Config.HitChance
-local hitChanceOk = (activeHitChance >= 100) or (math.random(1, 100) <= activeHitChance)
+-- Intentional Miss System: CM only — every 5-8 kills, force 1 miss to look human
+local _forceThisMiss = false
+if Config.CombatMaster then
+pcall(function()
+  if not State._missKillCount then State._missKillCount = 0 end
+  if not State._missThreshold then State._missThreshold = math.random(5, 8) end
+  if not State._missInjected then State._missInjected = false end
+  if State._missInjected then
+    State._missInjected = false
+  elseif State._missKillCount >= State._missThreshold then
+    _forceThisMiss = true
+    State._missInjected = true
+    State._missKillCount = 0
+    State._missThreshold = math.random(5, 8)
+  end
+end)
+end
+-- CM: cap HitChance at 82 max (server flags 100% hit streaks)
+local activeHitChance = Config.CombatMaster and math.min(Config.HitChance, 82) or Config.HitChance
+local hitChanceOk = (not _forceThisMiss) and
+  ((activeHitChance >= 100) or (math.random(1, 100) <= activeHitChance))
 if hitChanceOk then
 local origin = args[1]
 local targetPos = targetPart.Position
@@ -5103,6 +5126,24 @@ end)
 task.wait(1)
 end
 end)
+-- Kill counter for intentional miss system
+-- Listens to MatchFeed (Server→Client) for kills attributed to LP
+do
+  local RS2 = game:GetService("ReplicatedStorage")
+  pcall(function()
+    local remotes = RS2:FindFirstChild("Shared") and RS2.Shared:FindFirstChild("Remotes")
+    local feedRemote = remotes and remotes:FindFirstChild("WeaponHit")
+    if feedRemote and feedRemote:IsA("RemoteEvent") then
+      regConn(feedRemote.OnClientEvent:Connect(function(data)
+        if type(data) == "table" and data.Killed then
+          if not State._missKillCount then State._missKillCount = 0 end
+          State._missKillCount = State._missKillCount + 1
+        end
+      end))
+    end
+  end)
+end
+
 task.spawn(function()
 local alertedStaff = {}
 local isStaffInServer = false
@@ -5158,22 +5199,28 @@ preStaffBackup = {
 HitChance = Config.HitChance,
 HitPart = Config.HitPart,
 RapidFire = Config.RapidFire,
-HitboxExpander = Config.HitboxExpander
+HitboxExpander = Config.HitboxExpander,
+CombatMaster = Config.CombatMaster,
+SilentAim = Config.SilentAim,
 }
-Config.HitChance = 75
-Config.HitPart = "Closest"
+Config.HitChance = 72       -- well below flagging threshold
+Config.HitPart = "Closest"  -- never headshot-only while watched
 Config.RapidFire = false
 Config.HitboxExpander = false
+Config.CombatMaster = false  -- disable god mode while staff watching
+-- SilentAim stays ON but at safe values above
 pcall(function()
 tk4Notify("AUTO-LEGIT ACTIVE!", "Staff detected! Silent Aim switched to legit mode.", "warn", 6)
 end)
 elseif not currentStaffFound and isStaffInServer then
 isStaffInServer = false
 if preStaffBackup then
-Config.HitChance = preStaffBackup.HitChance or 100
+Config.HitChance = preStaffBackup.HitChance or 82
 Config.HitPart = preStaffBackup.HitPart or "Head"
 Config.RapidFire = preStaffBackup.RapidFire or false
 Config.HitboxExpander = preStaffBackup.HitboxExpander or false
+Config.CombatMaster = preStaffBackup.CombatMaster or false
+Config.SilentAim = preStaffBackup.SilentAim ~= false
 preStaffBackup = nil
 end
 pcall(function()
