@@ -171,8 +171,8 @@ RapidMultiplier    = 2.0,
 FullAuto           = false,
 CombatMaster       = false,   -- Master God Mode Combo
 CMBodyRotate       = true,    -- CM: rotate body toward target (no camera = no detection)
-NoHeadShotKill     = true,    -- CM: the FINISHING hit is never a headshot (kill counts as normal)
-CMHeadSafety       = 1.6,     -- CM: aim Head only when one headshot CANNOT kill (x this margin)
+NoHeadShotKill     = true,    -- CM: swap a LETHAL head hit to the torso (kill counts as normal)
+CMHeadSafety       = 1.35,    -- CM: head kept only if HP > headDamage x this
 AutoReload         = false,   -- Auto Spam Recharge on empty
 InfiniteAmmo       = false,   -- Smart Adaptive Infinite Ammo (Never exceeds legal gun mag)
 InfiniteStamina    = false,
@@ -1230,9 +1230,9 @@ elseif hp == "ClosestNoHead" then
 local camPos = Camera.CFrame.Position
 local best, bestDist = nil, math.huge
 for _, n in ipairs({
-  "UpperTorso", "LowerTorso",
-  "RightUpperArm", "LeftUpperArm",
-  "RightUpperLeg", "LeftUpperLeg"
+  "UpperTorso", "LowerTorso", "HumanoidRootPart",
+  "LeftUpperArm", "RightUpperArm",
+  "LeftUpperLeg", "RightUpperLeg"
 }) do
   local p = char:FindFirstChild(n)
   if p then
@@ -1240,18 +1240,18 @@ for _, n in ipairs({
     if d < bestDist then best = p; bestDist = d end
   end
 end
-return best or char:FindFirstChild("UpperTorso") or char:FindFirstChild("HumanoidRootPart")
+return best or char:FindFirstChild("HumanoidRootPart")
 else
 return char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
 end
 end
 
 -- ============================================================
--- NO-HEADSHOT FINISHER (Combat Master)
--- The game flags a kill as "headshot" from the part of the KILLING
--- hit only (Ballistics.PartMultiplier -> isHead). So: keep shooting
--- the Head while a headshot is mathematically unable to kill, then
--- finish on torso / limb so the last hit is never the head.
+-- NO-HEADSHOT FINISHER (fire-time only)
+-- The kill is flagged headshot from the part of the KILLING hit.
+-- Target selection stays exactly as before (Head above 60% HP).
+-- Only at the moment the shot leaves, if that Head hit would kill,
+-- the hit part is swapped to the torso so the kill stays a body kill.
 -- ============================================================
 local function getEquippedWeaponData()
   if not WeaponData then return nil end
@@ -1299,36 +1299,21 @@ local function estimateHeadDamage(w, dist)
   return base * (D.Headshot or 1) * scale
 end
 
--- Hit-part key for getTargetPart(). Never returns "Head" when the
--- next headshot could finish the target.
-local function getCMAdaptiveHitPart(hum, char)
-  if not hum then return Config.HitPart end
-  local maxHP = hum.MaxHealth
-  if not maxHP or maxHP <= 0 then maxHP = 100 end
-  local hp = hum.Health
-  if hp <= 0 then return "Torso" end
-
-  -- legacy behaviour if the feature is switched off
-  if Config.NoHeadShotKill == false then
-    local pct = (hp / maxHP) * 100
-    if pct > 60 then return "Head"
-    elseif pct > 30 then return "ClosestNoHead"
-    else return "Torso" end
-  end
-
-  local dist = 0
-  local hrp = char and char:FindFirstChild("HumanoidRootPart")
-  if hrp then dist = (Camera.CFrame.Position - hrp.Position).Magnitude end
-
+-- If this Head hit could kill, return the torso instead. Never errors out.
+local function cmAvoidLethalHeadshot(part)
+  if not part then return part end
+  local nm = part.Name
+  if nm ~= "Head" and nm ~= "HitboxHead" then return part end
+  local char = part.Parent
+  local hum = char and char:FindFirstChildOfClass("Humanoid")
+  if not hum or hum.Health <= 0 then return part end
+  local dist = (Camera.CFrame.Position - part.Position).Magnitude
   local headDmg = estimateHeadDamage(getEquippedWeaponData(), dist)
-  if headDmg <= 0 then headDmg = 60 end -- unknown weapon: assume a strong headshot
-
-  local margin = Config.CMHeadSafety or 1.6
-  local safeAbove = headDmg * margin
-  if maxHP * 0.65 > safeAbove then safeAbove = maxHP * 0.65 end
-
-  if hp > safeAbove then return "Head" end
-  return "ClosestNoHead" -- finisher: torso / limb, never head
+  if headDmg <= 0 then return part end
+  local margin = Config.CMHeadSafety or 1.35
+  if hum.Health > headDmg * margin then return part end -- head is safe, keep it
+  local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("LowerTorso")
+  return torso or part
 end
 local function getAimScreenCenter()
   local vp = (Camera and Camera.ViewportSize) or Vector2.new(1366, 768)
@@ -1341,8 +1326,26 @@ local camPos   = Camera.CFrame.Position
 local shortest = Config.CombatMaster and math.huge or Config.FOVRadius
 local cmOn = Config.CombatMaster and true or false
 
--- Adaptive hit part (Combat Master) -> getCMAdaptiveHitPart() above:
---   Head only while a headshot cannot kill, else torso/limb finisher.
+-- ── ADAPTIVE HIT PART (Combat Master only) ───────────────────────────────
+-- Reads enemy HP% and picks the best body part to hit:
+--   HP > 60%  → Head          (maximum damage, go for the kill fast)
+--   30-60%    → Torso/UpperTorso (wider hitbox, don't waste shots)
+--   < 30%     → Closest part  (guaranteed kill, any hit finishes them)
+-- Only active when CombatMaster = true. Falls back to Config.HitPart otherwise.
+local function getCMAdaptiveHitPart(hum)
+  if not hum then return Config.HitPart end
+  local maxHP = hum.MaxHealth
+  if not maxHP or maxHP <= 0 then maxHP = 100 end
+  local hpPct = (hum.Health / maxHP) * 100
+
+  if hpPct > 60 then
+    return "Head"             -- HP > 60%  → headshot, kill fast
+  elseif hpPct > 30 then
+    return "ClosestNoHead"    -- HP 30-60% → closest part, NEVER head (arms/legs/torso)
+  else
+    return "Torso"            -- HP < 30%  → torso guaranteed finish
+  end
+end
 
 local bestPart, bestPlayer = nil, nil
 local function considerChar(char, pseudoPlayer, preDist)
@@ -1354,7 +1357,7 @@ if Config.SkipImmune and isTargetImmune(pseudoPlayer) then return end
 -- Pre-distance gate: skip enemies clearly further than current best (saves raycast on busy servers)
 if preDist and preDist > shortest * 1.15 and not cmOn then return end
 -- CM: use adaptive hit part based on enemy HP; Non-CM: Config.HitPart
-local hitPart = cmOn and getCMAdaptiveHitPart(hum, char) or Config.HitPart
+local hitPart = cmOn and getCMAdaptiveHitPart(hum) or Config.HitPart
 local part = getTargetPart(char, hitPart)
 if not part then return end
 local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
@@ -1438,6 +1441,9 @@ if not targetPart or not targetPart.Parent then
 targetPart, targetPlayer = findSilentTarget()
 end
 if targetPart then
+if Config.CombatMaster and Config.NoHeadShotKill ~= false then
+  pcall(function() targetPart = cmAvoidLethalHeadshot(targetPart) end)
+end
 local activeHitChance = Config.CombatMaster and 100 or Config.HitChance
 local hitChanceOk = (activeHitChance >= 100) or (math.random(1, 100) <= activeHitChance)
 if hitChanceOk then
@@ -4727,8 +4733,18 @@ do
             pcall(function()
               if not Config.CombatMaster then return end
               -- get the best hit part for their current HP
-              local hitSpec = getCMAdaptiveHitPart(char:FindFirstChildOfClass("Humanoid"), char)
-              local part = getTargetPart(char, hitSpec)
+              local hitPart = "Head"
+              pcall(function()
+                local h = char:FindFirstChildOfClass("Humanoid")
+                if h then
+                  local maxHP = h.MaxHealth; if maxHP <= 0 then maxHP = 100 end
+                  local pct = (h.Health / maxHP) * 100
+                  if pct > 60 then hitPart = "Head"
+                  elseif pct > 30 then hitPart = "ClosestNoHead"
+                  else hitPart = "Torso" end
+                end
+              end)
+              local part = char:FindFirstChild(hitPart)
                         or char:FindFirstChild("UpperTorso")
                         or char:FindFirstChild("HumanoidRootPart")
               if not part then return end
