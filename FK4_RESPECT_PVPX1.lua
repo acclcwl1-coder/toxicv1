@@ -419,7 +419,9 @@ function State.CM.ammoTick(firing, wantTop, wantReload)
   end
 
   if firing then
-    if wantTop and cur < mx and (cur <= 3 or now - CM.lastTop >= 0.5) then
+    -- SPAM RECHARGE WHILE FIRING: silent top-up every tick (no reload animation,
+    -- no trigger lock) so the magazine never runs dry while shooting.
+    if wantTop and cur < mx then
       CM.lastTop = now
       setupvalueFn(R.fn, R.ai, mx)
       cur = mx
@@ -4600,6 +4602,9 @@ do
     if now - _cmReloadAt < 0.6 then return end
     _cmReloadAt = now
     pcall(function()
+      -- While firing, ammoTick already tops the magazine up silently; a real
+      -- Reload() here would set ClientState.Reloading and cut the shot stream.
+      if State.CM.ammo and State.CM.isFiring() then return end
       -- Clear reload-locked flag first so the weapon doesn't get stuck
       if State.CM.clearReloading then State.CM.clearReloading() end
       if WeaponController.Reload then WeaponController.Reload() end
