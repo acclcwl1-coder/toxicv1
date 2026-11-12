@@ -171,6 +171,8 @@ RapidMultiplier    = 2.0,
 FullAuto           = false,
 CombatMaster       = false,   -- Master God Mode Combo
 CMBodyRotate       = true,    -- CM: rotate body toward target (no camera = no detection)
+NoHeadShotKill     = true,    -- CM: the FINISHING hit is never a headshot (kill counts as normal)
+CMHeadSafety       = 1.6,     -- CM: aim Head only when one headshot CANNOT kill (x this margin)
 AutoReload         = false,   -- Auto Spam Recharge on empty
 InfiniteAmmo       = false,   -- Smart Adaptive Infinite Ammo (Never exceeds legal gun mag)
 InfiniteStamina    = false,
@@ -1228,9 +1230,9 @@ elseif hp == "ClosestNoHead" then
 local camPos = Camera.CFrame.Position
 local best, bestDist = nil, math.huge
 for _, n in ipairs({
-  "UpperTorso", "LowerTorso", "HumanoidRootPart",
-  "LeftUpperArm", "RightUpperArm",
-  "LeftUpperLeg", "RightUpperLeg"
+  "UpperTorso", "LowerTorso",
+  "RightUpperArm", "LeftUpperArm",
+  "RightUpperLeg", "LeftUpperLeg"
 }) do
   local p = char:FindFirstChild(n)
   if p then
@@ -1238,10 +1240,95 @@ for _, n in ipairs({
     if d < bestDist then best = p; bestDist = d end
   end
 end
-return best or char:FindFirstChild("HumanoidRootPart")
+return best or char:FindFirstChild("UpperTorso") or char:FindFirstChild("HumanoidRootPart")
 else
 return char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
 end
+end
+
+-- ============================================================
+-- NO-HEADSHOT FINISHER (Combat Master)
+-- The game flags a kill as "headshot" from the part of the KILLING
+-- hit only (Ballistics.PartMultiplier -> isHead). So: keep shooting
+-- the Head while a headshot is mathematically unable to kill, then
+-- finish on torso / limb so the last hit is never the head.
+-- ============================================================
+local function getEquippedWeaponData()
+  if not WeaponData then return nil end
+  local ch = LP.Character
+  local tool = ch and (ch:FindFirstChildOfClass("Tool") or ch:FindFirstChild("Katana"))
+  local tn = tool and tool.Name
+  if not tn then return nil end
+  local low = string.lower(tn)
+  local partial = nil
+  for key, w in pairs(WeaponData) do
+    if type(w) == "table" and type(w.Damage) == "table" then
+      local kn = string.lower(tostring(key))
+      local nm = (w.Name and string.lower(tostring(w.Name))) or ""
+      local md = (w.Model and string.lower(tostring(w.Model))) or ""
+      if low == kn or (nm ~= "" and low == nm) or (md ~= "" and low == md) then
+        return w
+      end
+      if not partial and (string.find(low, kn, 1, true)
+        or (nm ~= "" and string.find(low, nm, 1, true))
+        or (md ~= "" and string.find(low, md, 1, true))) then
+        partial = w
+      end
+    end
+  end
+  return partial
+end
+
+-- Predicted damage of ONE headshot with the equipped weapon at dist studs
+local function estimateHeadDamage(w, dist)
+  if not w or type(w.Damage) ~= "table" then return 0 end
+  local D = w.Damage
+  local base = D.Base or 0
+  if base <= 0 then return 0 end
+  local scale = 1
+  local fs = D.FalloffStart or 0
+  local fe = D.FalloffEnd or 0
+  local ms = D.MinScale or 1
+  if fe > fs and dist > fs then
+    if dist >= fe then
+      scale = ms
+    else
+      scale = 1 + (ms - 1) * ((dist - fs) / (fe - fs))
+    end
+  end
+  return base * (D.Headshot or 1) * scale
+end
+
+-- Hit-part key for getTargetPart(). Never returns "Head" when the
+-- next headshot could finish the target.
+local function getCMAdaptiveHitPart(hum, char)
+  if not hum then return Config.HitPart end
+  local maxHP = hum.MaxHealth
+  if not maxHP or maxHP <= 0 then maxHP = 100 end
+  local hp = hum.Health
+  if hp <= 0 then return "Torso" end
+
+  -- legacy behaviour if the feature is switched off
+  if Config.NoHeadShotKill == false then
+    local pct = (hp / maxHP) * 100
+    if pct > 60 then return "Head"
+    elseif pct > 30 then return "ClosestNoHead"
+    else return "Torso" end
+  end
+
+  local dist = 0
+  local hrp = char and char:FindFirstChild("HumanoidRootPart")
+  if hrp then dist = (Camera.CFrame.Position - hrp.Position).Magnitude end
+
+  local headDmg = estimateHeadDamage(getEquippedWeaponData(), dist)
+  if headDmg <= 0 then headDmg = 60 end -- unknown weapon: assume a strong headshot
+
+  local margin = Config.CMHeadSafety or 1.6
+  local safeAbove = headDmg * margin
+  if maxHP * 0.65 > safeAbove then safeAbove = maxHP * 0.65 end
+
+  if hp > safeAbove then return "Head" end
+  return "ClosestNoHead" -- finisher: torso / limb, never head
 end
 local function getAimScreenCenter()
   local vp = (Camera and Camera.ViewportSize) or Vector2.new(1366, 768)
@@ -1254,26 +1341,8 @@ local camPos   = Camera.CFrame.Position
 local shortest = Config.CombatMaster and math.huge or Config.FOVRadius
 local cmOn = Config.CombatMaster and true or false
 
--- ── ADAPTIVE HIT PART (Combat Master only) ───────────────────────────────
--- Reads enemy HP% and picks the best body part to hit:
---   HP > 60%  → Head          (maximum damage, go for the kill fast)
---   30-60%    → Torso/UpperTorso (wider hitbox, don't waste shots)
---   < 30%     → Closest part  (guaranteed kill, any hit finishes them)
--- Only active when CombatMaster = true. Falls back to Config.HitPart otherwise.
-local function getCMAdaptiveHitPart(hum)
-  if not hum then return Config.HitPart end
-  local maxHP = hum.MaxHealth
-  if not maxHP or maxHP <= 0 then maxHP = 100 end
-  local hpPct = (hum.Health / maxHP) * 100
-
-  if hpPct > 60 then
-    return "Head"             -- HP > 60%  → headshot, kill fast
-  elseif hpPct > 30 then
-    return "ClosestNoHead"    -- HP 30-60% → closest part, NEVER head (arms/legs/torso)
-  else
-    return "Torso"            -- HP < 30%  → torso guaranteed finish
-  end
-end
+-- Adaptive hit part (Combat Master) -> getCMAdaptiveHitPart() above:
+--   Head only while a headshot cannot kill, else torso/limb finisher.
 
 local bestPart, bestPlayer = nil, nil
 local function considerChar(char, pseudoPlayer, preDist)
@@ -1285,7 +1354,7 @@ if Config.SkipImmune and isTargetImmune(pseudoPlayer) then return end
 -- Pre-distance gate: skip enemies clearly further than current best (saves raycast on busy servers)
 if preDist and preDist > shortest * 1.15 and not cmOn then return end
 -- CM: use adaptive hit part based on enemy HP; Non-CM: Config.HitPart
-local hitPart = cmOn and getCMAdaptiveHitPart(hum) or Config.HitPart
+local hitPart = cmOn and getCMAdaptiveHitPart(hum, char) or Config.HitPart
 local part = getTargetPart(char, hitPart)
 if not part then return end
 local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
@@ -3657,6 +3726,7 @@ local addSub   = makeSubSystem(aimFrame)
 local p0 = addSub("Combat Master")
 makeToggleRow(p0, "Combat Master (God Combo)", Config.CombatMaster, function(on) setCombatMaster(on) end, "CombatMaster")
 makeToggleRow(p0, "Body Rotate to Target", Config.CMBodyRotate, function(on) Config.CMBodyRotate = on end, "CMBodyRotate")
+makeToggleRow(p0, "No Headshot Kill (body finish)", Config.NoHeadShotKill, function(on) Config.NoHeadShotKill = on end, "NoHeadShotKill")
 makeToggleRow(p0, "Auto Spam Recharge", Config.AutoReload, function(on) Config.AutoReload = on end, "AutoReload")
 local p1 = addSub("Silent Aim")
 makeToggleRow(p1, "Silent Aim", Config.SilentAim, function(on) Config.SilentAim = on end, "SilentAim")
@@ -4657,18 +4727,8 @@ do
             pcall(function()
               if not Config.CombatMaster then return end
               -- get the best hit part for their current HP
-              local hitPart = "Head"
-              pcall(function()
-                local h = char:FindFirstChildOfClass("Humanoid")
-                if h then
-                  local maxHP = h.MaxHealth; if maxHP <= 0 then maxHP = 100 end
-                  local pct = (h.Health / maxHP) * 100
-                  if pct > 60 then hitPart = "Head"
-                  elseif pct > 30 then hitPart = "ClosestNoHead"
-                  else hitPart = "Torso" end
-                end
-              end)
-              local part = char:FindFirstChild(hitPart)
+              local hitSpec = getCMAdaptiveHitPart(char:FindFirstChildOfClass("Humanoid"), char)
+              local part = getTargetPart(char, hitSpec)
                         or char:FindFirstChild("UpperTorso")
                         or char:FindFirstChild("HumanoidRootPart")
               if not part then return end
