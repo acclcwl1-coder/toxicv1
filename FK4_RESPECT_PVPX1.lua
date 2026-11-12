@@ -840,14 +840,57 @@ queue_on_teleport
 end)
 if TK4_queueOnTeleport then
 local TK4_Q_CODE = [[
-    -- DEDUPE: only the first queued copy proceeds (flag lives in BOTH _G
-    -- and getgenv so it works on executors that isolate script envs)
+    -- DEDUPE FIX v11:
+    -- The old _G.TK4_AUTOLOAD_RUNNING flag was useless — it lived in the
+    -- OLD place's VM and died on teleport, so the queued code in the NEW
+    -- place never saw it. The real fix is to check if the menu ScreenGui
+    -- ("TK4_V5_GUI") already exists in the new place. If it does, the
+    -- script is already loaded and we bail out immediately.
+    local function tk4_guiAlreadyLoaded()
+      local LP2 = game:GetService("Players").LocalPlayer
+      if not LP2 then return false end
+      local pg = LP2:FindFirstChildOfClass("PlayerGui")
+      if pg and pg:FindFirstChild("TK4_V5_GUI") then return true end
+      -- also check CoreGui (some executors parent there)
+      local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+      if ok and cg and cg:FindFirstChild("TK4_V5_GUI") then return true end
+      -- check gethui
+      local ok2, hg = pcall(function() return gethui and gethui() end)
+      if ok2 and hg and hg:FindFirstChild("TK4_V5_GUI") then return true end
+      return false
+    end
+    -- Also keep a lightweight in-process flag so two simultaneous queue
+    -- copies (some executors double-fire) don't both proceed.
     if _G.TK4_AUTOLOAD_RUNNING then return end
     if getgenv and getgenv().TK4_AUTOLOAD_RUNNING then return end
     _G.TK4_AUTOLOAD_RUNNING = true
     if getgenv then getgenv().TK4_AUTOLOAD_RUNNING = true end
+    -- Safety: auto-clear the flag after 90s so a crashed load never
+    -- permanently blocks the next match's auto-execute.
+    task.delay(90, function()
+      _G.TK4_AUTOLOAD_RUNNING = nil
+      if getgenv then pcall(function() getgenv().TK4_AUTOLOAD_RUNNING = nil end) end
+    end)
     repeat task.wait() until game:IsLoaded()
+    -- PRIMARY FIX: if TK4 menu GUI is already in the new place, do nothing.
+    -- This handles the case where the user manually re-executed the script
+    -- just before the teleport fired — the queued code lands in a place that
+    -- already has the menu running. Without this check the script would load
+    -- a second time on top of the existing session.
+    if tk4_guiAlreadyLoaded() then
+      _G.TK4_AUTOLOAD_RUNNING = nil
+      if getgenv then pcall(function() getgenv().TK4_AUTOLOAD_RUNNING = nil end) end
+      print("[TK4] Auto-execute skipped — menu already loaded in this place.")
+      return
+    end
     task.wait(3)
+    -- Re-check after the settle wait (user may have manually executed during those 3s)
+    if tk4_guiAlreadyLoaded() then
+      _G.TK4_AUTOLOAD_RUNNING = nil
+      if getgenv then pcall(function() getgenv().TK4_AUTOLOAD_RUNNING = nil end) end
+      print("[TK4] Auto-execute skipped — menu loaded during settle wait.")
+      return
+    end
     local LP = game:GetService("Players").LocalPlayer
     if not LP then
       repeat task.wait(0.1)
@@ -940,6 +983,15 @@ local TK4_Q_CODE = [[
       -- No vote UI found (casual match or timeout) — arrived directly in arena
       task.wait(2)
     end
+    -- Final guard: re-check for GUI right before loading.
+    -- The vote-lobby wait can take up to 90s. If the user manually executed
+    -- the script during that window, bail out here instead of double-loading.
+    if tk4_guiAlreadyLoaded() then
+      _G.TK4_AUTOLOAD_RUNNING = nil
+      if getgenv then pcall(function() getgenv().TK4_AUTOLOAD_RUNNING = nil end) end
+      print("[TK4] Auto-execute skipped — menu already loaded before file read.")
+      return
+    end
     -- METHOD 1 (preferred): local files (clean copy — no Panda crash risk)
     local paths = {
       "TK4_RespectPVP_final_v10_mobile.lua",
@@ -957,6 +1009,8 @@ local TK4_Q_CODE = [[
         end)
         if fOk then
           print("[TK4] Loaded from file: " .. p)
+          _G.TK4_AUTOLOAD_RUNNING = nil
+          if getgenv then pcall(function() getgenv().TK4_AUTOLOAD_RUNNING = nil end) end
           return
         else
           warn("[TK4] File load failed:", p, fErr)
@@ -971,12 +1025,16 @@ local TK4_Q_CODE = [[
       end)
       if urlOk then
         print("[TK4] Loaded from URL after teleport!")
+        _G.TK4_AUTOLOAD_RUNNING = nil
+        if getgenv then pcall(function() getgenv().TK4_AUTOLOAD_RUNNING = nil end) end
         return
       else
         warn("[TK4] URL load failed:", urlErr)
       end
     end
     warn("[TK4] No source found after teleport! Place the file in the executor workspace.")
+    _G.TK4_AUTOLOAD_RUNNING = nil
+    if getgenv then pcall(function() getgenv().TK4_AUTOLOAD_RUNNING = nil end) end
   ]]
 pcall(function()
 -- DEDUPE: only ONE OnTeleport listener allowed across all instances.
