@@ -1,0 +1,1957 @@
+-- ══════════════════════════════════════════════════════════════════
+--  CLAN V3.1 — xx1 features + TK4 working ESP engine
+--  Left sidebar navigation (TOXIC SLEEPY style icon rows) replaces top tabs
+--  ESP runs on RenderStepped (like TK4) instead of Heartbeat
+--  Anti-Head-Kill removed from UI (kept in logic for safety)
+--  Mobile + PC supported (ScreenGui fallback when no Drawing API)
+-- ══════════════════════════════════════════════════════════════════
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
+local TweenService      = game:GetService("TweenService")
+local Workspace         = game:GetService("Workspace")
+local Lighting          = game:GetService("Lighting")
+local CoreGui           = game:GetService("CoreGui")
+local HttpService       = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LP = Players.LocalPlayer
+if not LP then
+    repeat task.wait() until Players.LocalPlayer
+    LP = Players.LocalPlayer
+end
+
+local Camera = Workspace.CurrentCamera
+
+if not math.clamp then
+    math.clamp = function(v, min, max) return math.max(min, math.min(v, max)) end
+end
+
+local GStore = (typeof(getgenv) == "function" and getgenv()) or _G
+
+-- ── Re-execution safety ─────────────────────────────────────────────────
+-- Running this file 2x / 100x must always leave EXACTLY ONE menu, one ESP,
+-- one hook and one set of connections. No duplicate UI, no dead functions.
+local function hardSweep()
+    -- 1) restore a __namecall hook left by a previous run
+    if GStore.CLAN_RAW_NAMECALL then
+        if type(restorefunction) == "function" then
+            pcall(restorefunction, GStore.CLAN_RAW_NAMECALL)
+        else
+            pcall(function() hookmetamethod(game, "__namecall", GStore.CLAN_RAW_NAMECALL) end)
+        end
+        GStore.CLAN_RAW_NAMECALL = nil
+    end
+    -- 1b) drop the old camera listener
+    if GStore.CLAN_CAM_CONN then
+        pcall(function() GStore.CLAN_CAM_CONN:Disconnect() end)
+        GStore.CLAN_CAM_CONN = nil
+    end
+    -- 2) remove leftover drawing objects
+    if GStore._CLAN_FOVCircle then
+        pcall(function() GStore._CLAN_FOVCircle:Remove() end)
+        GStore._CLAN_FOVCircle = nil
+    end
+    if GStore._CLAN_DRAWINGS then
+        for _, obj in ipairs(GStore._CLAN_DRAWINGS) do
+            pcall(function() obj:Remove() end)
+        end
+    end
+    GStore._CLAN_DRAWINGS = {}
+    GStore._CLAN_ESPGui = nil
+    -- 3) destroy leftover GUIs in every possible container
+    local containers = { CoreGui }
+    pcall(function()
+        local pg = LP and LP:FindFirstChildOfClass("PlayerGui")
+        if pg then containers[#containers + 1] = pg end
+    end)
+    for _, parent in ipairs(containers) do
+        if parent then
+            for _, guiName in ipairs({ "CLAN_V3_GUI", "CLAN_ESP_Overlays" }) do
+                local ok, old = pcall(function() return parent:FindFirstChild(guiName) end)
+                if ok and old then pcall(function() old:Destroy() end) end
+            end
+        end
+    end
+    -- 1c) STARTUP SAFETY: always clean leftover TK4_CamSink from a prior session
+    -- and restore the camera + mouse to the game's own state before starting again
+    pcall(function()
+        ContextActionService:UnbindAction("TK4_CamSink")
+        ContextActionService:UnbindAction("TK4_CamSink_v2")
+        ContextActionService:UnbindAction("TK4_CamSink_old")
+    end)
+    if GStore._TK4_MouseConn then
+        pcall(function() GStore._TK4_MouseConn:Disconnect() end)
+        GStore._TK4_MouseConn = nil
+    end
+    pcall(function() Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom end)
+    pcall(function()
+        UserInputService.MouseBehavior    = Enum.MouseBehavior.Default
+        UserInputService.MouseIconEnabled = true
+    end)
+end
+
+if GStore.CLAN_RESPECT_CLEANUP then
+    pcall(GStore.CLAN_RESPECT_CLEANUP)
+    GStore.CLAN_RESPECT_CLEANUP = nil
+end
+hardSweep()
+-- provisional cleanup: protects against a crash *during* this load
+GStore.CLAN_RESPECT_CLEANUP = hardSweep
+
+local SCRIPT_ID = HttpService:GenerateGUID(false)
+GStore.CLAN_SCRIPT_ID = SCRIPT_ID
+
+-- camera listener (managed so re-execution never stacks listeners)
+GStore.CLAN_CAM_CONN = Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+    Camera = Workspace.CurrentCamera
+end)
+
+-- ── Colors ──────────────────────────────────────────────────────
+local C = {
+    winBg       = Color3.fromRGB(8, 6, 12),
+    winBg2      = Color3.fromRGB(12, 10, 18),
+    winBorder   = Color3.fromRGB(52, 34, 82),
+    topBg       = Color3.fromRGB(6, 4, 10),
+    topTitle    = Color3.fromRGB(255, 255, 255),
+    topSub      = Color3.fromRGB(165, 150, 185),
+    rowBg       = Color3.fromRGB(17, 13, 25),
+    rowHov      = Color3.fromRGB(28, 20, 42),
+    rowStroke   = Color3.fromRGB(50, 36, 75),
+    rowLabel    = Color3.fromRGB(245, 245, 245),
+    rowValue    = Color3.fromRGB(220, 220, 220),
+    pillOff     = Color3.fromRGB(42, 30, 58),
+    pillOn      = Color3.fromRGB(130, 68, 255),
+    dotColor    = Color3.fromRGB(255, 255, 255),
+    tabBg       = Color3.fromRGB(15, 11, 22),
+    tabActiveBg = Color3.fromRGB(130, 68, 255),
+    tabActiveTx = Color3.fromRGB(255, 255, 255),
+    tabIdleTx   = Color3.fromRGB(170, 160, 185),
+    accent      = Color3.fromRGB(130, 68, 255),
+    accentDim   = Color3.fromRGB(90, 42, 180),
+    danger      = Color3.fromRGB(255, 55, 85),
+    rowAlpha    = 0.25,
+}
+
+local BRAND = {
+    Name    = "CLAN",
+    Full    = "CLAN V3",
+    Motto   = "Unity - Respect - Power - Loyalty",
+    LogoId  = "rbxassetid://102293188968456",
+}
+
+-- ── Config ───────────────────────────────────────────────────────
+local Config = {
+    -- AIM
+    SilentAim          = true,
+    HeadRatio          = 20,
+    FOVRadius          = 220,
+    DrawFOV            = false,
+    WallCheck          = true,
+    TeamCheck          = true,
+    SkipDeflect        = true,
+    SkipImmune         = true,
+    NoRecoil           = true,
+    NoBloom            = true,
+
+    -- ESP (use TK4 key names where they differ)
+    ESP_Master         = true,
+    ESP_Box            = true,
+    ESP_BoxStyle       = "Corner",
+    ESP_Health         = true,
+    ESP_Names          = true,
+    ESP_Distance       = true,
+    ESP_Tracers        = false,
+    ESP_MaxDistance    = 600,
+    ESP_TextSize       = 13,
+    ESP_TeamCheck      = true,   -- TK4 key name (same function)
+    ESP_Roles          = true,   -- staff/admin role tag + colors (from fk4v11)
+    ESP_Skeleton       = true,   -- R15 bone lines (PC only, <220 studs)
+    ESP_Head           = true,   -- head circle dot
+    ESP_HealthNum      = false,  -- HP number next to health bar
+    ESP_Level          = true,   -- Lv.X next to player name
+    ESP_Rank           = true,   -- rank name (GOLD II etc) with official color
+    ESP_FiringAlert    = true,   -- [FIRING] tag when enemy is shooting
+    ESP_Alerts         = true,   -- [PROTECTED] / [HEALING] / [ARMORING] status tags
+    -- custom colors (TK4 style)
+    esp_col_box_r=130, esp_col_box_g=68,  esp_col_box_b=255,
+    esp_col_name_r=255,esp_col_name_g=255,esp_col_name_b=255,
+    esp_col_dist_r=180,esp_col_dist_g=170,esp_col_dist_b=200,
+    esp_col_tracer_r=130,esp_col_tracer_g=68,esp_col_tracer_b=255,
+    esp_col_head_r=130,esp_col_head_g=68, esp_col_head_b=255,
+
+    -- MOVE
+    SpeedBoost         = false,
+    SpeedValue         = 40,
+    AutoSprint         = true,
+    InfiniteStamina    = true,
+    InfiniteJump       = false,
+
+    -- MISC
+    MenuKey            = Enum.KeyCode.K,
+    GuiVisible         = false,
+    AutoSaveConfig     = true
+}
+
+-- ── State ────────────────────────────────────────────────────────
+local State = {
+    Connections     = {},
+    ESPCache        = {},
+    ActiveTarget    = nil,
+    TargetPart      = nil,
+    TargetHP        = 100,
+    TargetDist      = 0,
+    EquippedWeapon  = "AK",
+}
+
+local function regConn(conn)
+    if conn then table.insert(State.Connections, conn) end
+    return conn
+end
+
+-- ── Game modules (optional) ──────────────────────────────────────
+local WeaponData, ClientState, GameSettings = nil, nil, nil
+task.spawn(function()
+    pcall(function() WeaponData  = require(ReplicatedStorage.Shared.Config.WeaponData) end)
+    pcall(function() ClientState = require(ReplicatedStorage.Client.ClientState) end)
+    pcall(function() GameSettings = require(ReplicatedStorage.Shared.Config.Settings) end)
+end)
+
+-- ── Weapon data ──────────────────────────────────────────────────
+local WEAPON_DATA_LOOKUP = {
+    ["AK"]     = { base=12,  head=3.2,  limb=0.85, fStart=100, fEnd=320, minS=0.8, range=700 },
+    ["AR"]     = { base=11,  head=2.75, limb=0.85, fStart=100, fEnd=320, minS=0.8, range=700 },
+    ["AW50"]   = { base=100, head=1.5,  limb=0.7,  fStart=700, fEnd=700, minS=1.0, range=700 },
+    ["Kar98k"] = { base=70,  head=1.5,  limb=0.8,  fStart=700, fEnd=700, minS=1.0, range=700 },
+    ["1911"]   = { base=22,  head=2.7,  limb=0.8,  fStart=35,  fEnd=130, minS=0.6, range=700 },
+    ["Glock"]  = { base=17,  head=2.2,  limb=0.8,  fStart=30,  fEnd=120, minS=0.6, range=700 },
+    ["RPG"]    = { base=150, head=1.0,  limb=1.0,  fStart=600, fEnd=600, minS=1.0, range=600 },
+}
+local cachedWeaponKey, cachedWeaponStats = nil, nil
+
+local function getEquippedWeaponStats()
+    local name = "AK"
+    if LP.Character then
+        local tool = LP.Character:FindFirstChildOfClass("Tool")
+        if tool then
+            for k in pairs(WEAPON_DATA_LOOKUP) do
+                if tool.Name:lower():find(k:lower()) then name = k; break end
+            end
+        end
+    end
+    if cachedWeaponKey == name and cachedWeaponStats then return name, cachedWeaponStats end
+    local stats = WEAPON_DATA_LOOKUP[name] or WEAPON_DATA_LOOKUP["AK"]
+    local fromData = false
+    if WeaponData and WeaponData[name] and WeaponData[name].Damage then
+        local d = WeaponData[name].Damage
+        stats = { base=d.Base or stats.base, head=d.Headshot or stats.head, limb=d.Limb or stats.limb,
+                  fStart=d.FalloffStart or stats.fStart, fEnd=d.FalloffEnd or stats.fEnd,
+                  minS=d.MinScale or stats.minS, range=d.Range or stats.range }
+        fromData = true
+    end
+    if fromData then cachedWeaponKey = name; cachedWeaponStats = stats end
+    return name, stats
+end
+
+-- ── Helpers ──────────────────────────────────────────────────────
+local function getBodyParts(char)
+    local parts = {}
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("BasePart") and child.Name ~= "Head" then
+            table.insert(parts, child)
+        end
+    end
+    return parts
+end
+
+local function pickSmartPart(char, hum, dist)
+    if not hum or hum.Health <= 0 then
+        return char:FindFirstChild("UpperTorso") or char:FindFirstChild("HumanoidRootPart")
+    end
+    local roll = math.random(1, 100)
+    if roll <= (Config.HeadRatio or 20) then
+        local h = char:FindFirstChild("Head")
+        if h then return h end
+    end
+    local limbs = getBodyParts(char)
+    if #limbs > 0 then return limbs[math.random(1, #limbs)] end
+    return char:FindFirstChild("UpperTorso") or char:FindFirstChild("HumanoidRootPart")
+end
+
+local RayParams = RaycastParams.new()
+RayParams.FilterType = Enum.RaycastFilterType.Exclude
+RayParams.IgnoreWater = true
+
+local function isTeammate(plr)
+    if not plr or plr == LP then return true end
+    if LP.Team ~= nil and plr.Team ~= nil then return LP.Team == plr.Team end
+    local a1, a2 = LP:GetAttribute("Team"), plr:GetAttribute("Team")
+    if a1 and a2 and tostring(a1) ~= "" then return tostring(a1) == tostring(a2) end
+    return false
+end
+
+local function isDeflecting(plr)
+    if not plr or not plr.Character then return false end
+    local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+    if hum then
+        for _, trk in ipairs(hum:GetPlayingAnimationTracks()) do
+            local n = trk.Animation and trk.Animation.Name:lower() or ""
+            if n:find("deflect") or n:find("parry") or n:find("block") then return true end
+        end
+    end
+    return false
+end
+
+local function isImmune(plr)
+    if not plr or not plr.Character then return false end
+    if plr.Character:FindFirstChildOfClass("ForceField") then return true end
+    local prot = plr.Character:GetAttribute("ProtectedUntil")
+    if typeof(prot) == "number" and (prot - workspace:GetServerTimeNow()) > 0 then return true end
+    for _, attr in ipairs({"IsInvincible","Immune","IsImmune","SpawnProtection"}) do
+        if plr.Character:GetAttribute(attr) == true then return true end
+    end
+    return false
+end
+
+local function isVisible(fromPos, toPos, char)
+    if not Config.WallCheck then return true end
+    RayParams.FilterDescendantsInstances = { Camera, LP.Character, char }
+    return Workspace:Raycast(fromPos, toPos - fromPos, RayParams) == nil
+end
+
+local function scanBestTarget()
+    if not Config.SilentAim then State.ActiveTarget = nil; State.TargetPart = nil; return end
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local camPos = Camera.CFrame.Position
+    local best, bestChar, bestDist, bestDd = Config.FOVRadius, nil, nil, 0
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and p.Character and (not Config.TeamCheck or not isTeammate(p)) then
+            local hum = p.Character:FindFirstChildOfClass("Humanoid")
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            if hum and hrp and hum.Health > 0
+               and not (Config.SkipDeflect and isDeflecting(p))
+               and not (Config.SkipImmune and isImmune(p)) then
+                local sPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+                if onScreen and sPos.Z > 0 then
+                    local sd = (Vector2.new(sPos.X, sPos.Y) - center).Magnitude
+                    if sd <= best and isVisible(camPos, hrp.Position, p.Character) then
+                        best = sd; bestChar = p.Character; bestDist = p; bestDd = (hrp.Position - camPos).Magnitude
+                    end
+                end
+            end
+        end
+    end
+    if bestChar and bestDist then
+        local hum = bestChar:FindFirstChildOfClass("Humanoid")
+        State.ActiveTarget = bestDist
+        State.TargetHP     = hum.Health
+        State.TargetDist   = bestDd
+        State.TargetPart   = pickSmartPart(bestChar, hum, bestDd)
+    else
+        State.ActiveTarget = nil; State.TargetPart = nil
+    end
+end
+
+-- ── Namecall hook ────────────────────────────────────────────────
+if hookmetamethod then
+    local rawNamecall
+    rawNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "FireServer" and typeof(self) == "Instance" and self.Name == "WeaponFire"
+           and not (checkcaller and checkcaller()) then
+            if Config.SilentAim and State.TargetPart and State.TargetPart.Parent then
+                local args = { ... }
+                local n = select("#", ...)
+                local origin = args[1]
+                local targetPart = State.TargetPart
+                local targetPos  = targetPart.Position
+
+                if typeof(origin) == "Vector3" then
+                    local dir = (targetPos - origin)
+                    args[2] = dir.Unit; args[3] = targetPart; args[4] = targetPos
+                    args[5] = -dir.Unit
+                    if args[7] then args[7] = dir.Unit end
+                    if args[8] then args[8] = 0 end
+                else
+                    args[3] = targetPart; args[4] = targetPos; args[5] = Vector3.new(0,1,0)
+                end
+                return rawNamecall(self, table.unpack(args, 1, n))
+            end
+        end
+        return rawNamecall(self, ...)
+    end))
+    GStore.CLAN_RAW_NAMECALL = rawNamecall
+end
+
+-- ── Rank color table (from TK4 / RespectPVP_Player_Roles_And_Levels_Guide) ──
+local RESPECT_RANKS = {
+    ["Unranked"]  = { Color = Color3.fromRGB(120, 126, 140) },
+    ["Bronze"]    = { Color = Color3.fromRGB(205, 127,  50) },
+    ["Silver"]    = { Color = Color3.fromRGB(192, 198, 210) },
+    ["Gold"]      = { Color = Color3.fromRGB(255, 200,  60) },
+    ["Platinum"]  = { Color = Color3.fromRGB( 80, 220, 200) },
+    ["Diamond"]   = { Color = Color3.fromRGB( 90, 170, 255) },
+    ["Master"]    = { Color = Color3.fromRGB(170,  90, 255) },
+    ["Champion"]  = { Color = Color3.fromRGB(255,  80, 110) },
+}
+local function getRankInfo(rankName)
+    if not rankName or rankName == "" then return RESPECT_RANKS["Unranked"] end
+    local u = string.upper(tostring(rankName))
+    if string.find(u,"CHAMPION") then return RESPECT_RANKS["Champion"]
+    elseif string.find(u,"MASTER")   then return RESPECT_RANKS["Master"]
+    elseif string.find(u,"DIAMOND")  then return RESPECT_RANKS["Diamond"]
+    elseif string.find(u,"PLATINUM") then return RESPECT_RANKS["Platinum"]
+    elseif string.find(u,"GOLD")     then return RESPECT_RANKS["Gold"]
+    elseif string.find(u,"SILVER")   then return RESPECT_RANKS["Silver"]
+    elseif string.find(u,"BRONZE")   then return RESPECT_RANKS["Bronze"]
+    end
+    return RESPECT_RANKS["Unranked"]
+end
+
+-- ══════════════════════════════════════════════════════════════════
+--  ESP SYSTEM — TK4 engine (RenderStepped, mobile + PC)
+-- ══════════════════════════════════════════════════════════════════
+
+local function safeParentGui(gui)
+    local ok = false
+    pcall(function() if syn and syn.protect_gui then syn.protect_gui(gui) end end)
+    pcall(function() gui.Parent = CoreGui; ok = true end)
+    if not ok then pcall(function() if gethui then gui.Parent = gethui(); ok = true end end) end
+    if not ok then pcall(function() gui.Parent = LP:WaitForChild("PlayerGui") end) end
+end
+
+local HasDrawing = pcall(function() return Drawing ~= nil and Drawing.new ~= nil end) and Drawing ~= nil
+local MOBILE_MODE = (UserInputService.TouchEnabled and not UserInputService.MouseEnabled) or (not HasDrawing)
+
+local FOVCircle = nil
+if HasDrawing then
+    pcall(function()
+        if GStore._CLAN_FOVCircle then GStore._CLAN_FOVCircle:Remove() end
+        GStore._CLAN_FOVCircle = nil
+    end)
+    pcall(function()
+        FOVCircle = Drawing.new("Circle")
+        FOVCircle.Visible      = Config.DrawFOV
+        FOVCircle.Radius       = Config.FOVRadius
+        FOVCircle.Color        = C.accent
+        FOVCircle.Thickness    = 1.8
+        FOVCircle.Filled       = false
+        FOVCircle.Transparency = 1
+        FOVCircle.NumSides     = 64
+        GStore._CLAN_FOVCircle = FOVCircle
+    end)
+end
+
+local R15_BONES = {
+    {"Head","UpperTorso"}, {"UpperTorso","LowerTorso"},
+    {"UpperTorso","LeftUpperArm"},  {"LeftUpperArm","LeftLowerArm"},  {"LeftLowerArm","LeftHand"},
+    {"UpperTorso","RightUpperArm"}, {"RightUpperArm","RightLowerArm"},{"RightLowerArm","RightHand"},
+    {"LowerTorso","LeftUpperLeg"},  {"LeftUpperLeg","LeftLowerLeg"},  {"LeftLowerLeg","LeftFoot"},
+    {"LowerTorso","RightUpperLeg"}, {"RightUpperLeg","RightLowerLeg"},{"RightLowerLeg","RightFoot"},
+}
+
+local ESPGui
+if GStore._CLAN_ESPGui and GStore._CLAN_ESPGui.Parent then
+    ESPGui = GStore._CLAN_ESPGui
+else
+    ESPGui = Instance.new("ScreenGui")
+    ESPGui.Name = "CLAN_ESP_Overlays"
+    ESPGui.ResetOnSpawn = false
+    ESPGui.IgnoreGuiInset = true
+    ESPGui.DisplayOrder = 150
+    safeParentGui(ESPGui)
+    GStore._CLAN_ESPGui = ESPGui
+end
+for _, ch in ipairs(ESPGui:GetChildren()) do pcall(function() ch:Destroy() end) end
+
+local function getESPColor(key, defaultCol)
+    local r = Config["esp_col_"..key.."_r"]
+    local g = Config["esp_col_"..key.."_g"]
+    local b = Config["esp_col_"..key.."_b"]
+    if r and g and b then
+        return Color3.fromRGB(math.clamp(r,0,255), math.clamp(g,0,255), math.clamp(b,0,255))
+    end
+    return defaultCol or C.accent
+end
+
+-- ══ ESP Roles (taken from fk4v11_ORIGINAL_BACKUP) ══
+local STAFF_ROLES = {
+    [1] = { Text = "MOD",     Color = Color3.fromRGB(64,  170, 205) },
+    [2] = { Text = "ADMIN",   Color = Color3.fromRGB(138,  52, 255) },
+    [3] = { Text = "MANAGER", Color = Color3.fromRGB(10,  110, 130) },
+    [4] = { Text = "DEV",     Color = Color3.fromRGB(0,    70, 230) },
+    [5] = { Text = "OWNER",   Color = Color3.fromRGB(214, 160,  30) },
+}
+local CREATOR_ROLE = { Text = "CREATOR", Color = Color3.fromRGB(200, 30, 30) }
+
+local function getStaffRole(pl)
+    if not pl or pl == LP then return nil end
+    local level = 0
+    pcall(function() level = tonumber(pl:GetAttribute("AdminLevel")) or 0 end)
+    if STAFF_ROLES[level] then return STAFF_ROLES[level] end
+    local isCreator = false
+    pcall(function() isCreator = (pl:GetAttribute("ContentCreator") == true) end)
+    if isCreator then return CREATOR_ROLE end
+    local isAdmin = false
+    pcall(function() isAdmin = (pl:GetAttribute("Admin") == true) end)
+    if isAdmin then return STAFF_ROLES[2] end
+    return nil
+end
+
+local function newDrawObj(class, props)
+    local obj = Drawing.new(class)
+    for k, v in pairs(props or {}) do obj[k] = v end
+    local reg = GStore._CLAN_DRAWINGS
+    if reg then reg[#reg + 1] = obj end
+    return obj
+end
+
+local function createESP(player)
+    local esp = {}
+    if HasDrawing and not MOBILE_MODE then
+        esp.box      = {newDrawObj("Line",{}),newDrawObj("Line",{}),newDrawObj("Line",{}),newDrawObj("Line",{})}
+        esp.corners  = {}
+        esp.name     = newDrawObj("Text", {Center=true,  Outline=true, Size=Config.ESP_TextSize, Font=2})
+        esp.rank     = newDrawObj("Text", {Center=false, Outline=true, Size=13, Font=2})
+        esp.level    = newDrawObj("Text", {Center=false, Outline=true, Size=15, Font=2})
+        esp.dist     = newDrawObj("Text", {Center=true,  Outline=true, Size=Config.ESP_TextSize, Font=2})
+        esp.head     = newDrawObj("Circle", {NumSides=24, Thickness=1.5, Filled=false})
+        esp.health   = newDrawObj("Line", {Thickness=2.5})
+        esp.healthBg = newDrawObj("Line", {Thickness=2.5, Color=Color3.fromRGB(30,20,38)})
+        esp.head     = newDrawObj("Circle", {NumSides=24, Thickness=1.5, Filled=false})
+        esp.bones    = {}
+        esp.tracers  = newDrawObj("Line", {Thickness=1.2})
+        for i=1,8 do esp.corners[i] = newDrawObj("Line", {Thickness=2}) end
+        for i=1,#R15_BONES do esp.bones[i] = newDrawObj("Line", {Thickness=1.4}) end
+    end
+
+    if MOBILE_MODE then
+        local root = Instance.new("Frame")
+        root.Name = "MESP_"..tostring(player.Name or "X")
+        root.BackgroundTransparency = 1
+        root.BorderSizePixel = 0
+        root.Visible = false
+        root.Parent = ESPGui
+        esp.mRoot = root
+
+        local box = Instance.new("Frame")
+        box.Name = "Box"
+        box.BackgroundTransparency = 1
+        box.BorderSizePixel = 0
+        box.Visible = false
+        box.Parent = root
+        local bStroke = Instance.new("UIStroke")
+        bStroke.Thickness = 1.5
+        bStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        bStroke.Parent = box
+        esp.mBox = box
+
+        esp.mCorners = {}
+        for i=1,8 do
+            local f = Instance.new("Frame")
+            f.Name = "MC"..i
+            f.BorderSizePixel = 0
+            f.BackgroundColor3 = Color3.new(1,1,1)
+            f.Visible = false
+            f.Parent = root
+            esp.mCorners[i] = f
+        end
+
+        local function mLbl(n, sz)
+            local l = Instance.new("TextLabel")
+            l.Name = n
+            l.BackgroundTransparency = 1
+            l.BorderSizePixel = 0
+            l.Font = Enum.Font.GothamBold
+            l.TextSize = sz
+            l.TextStrokeTransparency = 0.35
+            l.TextColor3 = Color3.new(1,1,1)
+            l.ZIndex = 20
+            l.Visible = false
+            l.Parent = root
+            return l
+        end
+
+        esp.mLevel = mLbl("Level", 15)
+        esp.mLevel.AnchorPoint = Vector2.new(0, 0.5)
+        esp.mLevel.Size = UDim2.fromOffset(80, 16)
+        esp.mRank  = mLbl("Rank",  13)
+        esp.mRank.AnchorPoint = Vector2.new(0, 0.5)
+        esp.mRank.Size = UDim2.fromOffset(120, 16)
+        esp.mName = mLbl("Name", Config.ESP_TextSize or 13)
+        esp.mName.AnchorPoint = Vector2.new(0.5, 1)
+        esp.mName.Size = UDim2.fromOffset(240, 16)
+
+        esp.mDist = mLbl("Dist", Config.ESP_TextSize or 13)
+        esp.mDist.AnchorPoint = Vector2.new(0.5, 0)
+        esp.mDist.Size = UDim2.fromOffset(120, 14)
+
+        local hpBg = Instance.new("Frame")
+        hpBg.Name = "HpBg"
+        hpBg.BorderSizePixel = 0
+        hpBg.BackgroundColor3 = Color3.fromRGB(30,20,38)
+        hpBg.BackgroundTransparency = 0.25
+        hpBg.Visible = false
+        hpBg.Parent = root
+        esp.mHpBg = hpBg
+
+        local hpF = Instance.new("Frame")
+        hpF.Name = "Hp"
+        hpF.BorderSizePixel = 0
+        hpF.BackgroundColor3 = Color3.new(0,1,0)
+        hpF.Visible = false
+        hpF.Parent = root
+        esp.mHp = hpF
+    end
+
+    return esp
+end
+
+local function hideESP(esp)
+    if not esp then return end
+    if esp.box then
+        for _,l in ipairs(esp.box) do l.Visible = false end
+        for _,l in ipairs(esp.corners) do l.Visible = false end
+        if esp.name    then esp.name.Visible    = false end
+        if esp.dist    then esp.dist.Visible    = false end
+        if esp.health  then esp.health.Visible  = false end
+        if esp.healthBg then esp.healthBg.Visible = false end
+        if esp.head    then esp.head.Visible    = false end
+        if esp.tracers then esp.tracers.Visible = false end
+        if esp.rank    then esp.rank.Visible    = false end
+        if esp.level   then esp.level.Visible   = false end
+        if esp.head    then esp.head.Visible     = false end
+        if esp.mLevel  then esp.mLevel.Visible   = false end
+        if esp.mRank   then esp.mRank.Visible    = false end
+        if esp.bones   then for _,b in ipairs(esp.bones) do b.Visible=false end end
+    end
+    if esp.mRoot then esp.mRoot.Visible = false end
+end
+
+local function destroyESP(esp)
+    if not esp then return end
+    if esp.box then
+        for _,l in ipairs(esp.box) do pcall(function() l:Remove() end) end
+        for _,l in ipairs(esp.corners) do pcall(function() l:Remove() end) end
+        if esp.name     then pcall(function() esp.name:Remove() end) end
+        if esp.dist     then pcall(function() esp.dist:Remove() end) end
+        if esp.health   then pcall(function() esp.health:Remove() end) end
+        if esp.healthBg then pcall(function() esp.healthBg:Remove() end) end
+        if esp.head     then pcall(function() esp.head:Remove() end) end
+        if esp.tracers then pcall(function() esp.tracers:Remove() end) end
+        if esp.rank    then pcall(function() esp.rank:Remove()    end) end
+        if esp.level   then pcall(function() esp.level:Remove()   end) end
+        if esp.head    then pcall(function() esp.head:Remove()    end) end
+        if esp.bones    then for _,b in ipairs(esp.bones) do pcall(function() b:Remove() end) end end
+    end
+    if esp.mRoot then pcall(function() esp.mRoot:Destroy() end) end
+end
+
+local function updateESP(player, esp)
+    -- KEY FIX: hide when menu open (same as TK4)
+    if Config.GuiVisible then hideESP(esp); return end
+    if not Config.ESP_Master or not esp then hideESP(esp); return end
+    if player == LP or (Config.ESP_TeamCheck and isTeammate(player)) then hideESP(esp); return end
+
+    local char = player.Character
+    if not char then hideESP(esp); return end
+    local hum  = char:FindFirstChildOfClass("Humanoid")
+    local hrp  = char:FindFirstChild("HumanoidRootPart")
+    local head = char:FindFirstChild("Head")
+    if not hum or hum.Health <= 0 or not hrp then hideESP(esp); return end
+
+    local camPos = Camera.CFrame.Position
+    local dist3d = (hrp.Position - camPos).Magnitude
+    if dist3d > Config.ESP_MaxDistance then hideESP(esp); return end
+
+    local topWorld = ((head and head.Position) or (hrp.Position + Vector3.new(0,1.5,0))) + Vector3.new(0,0.7,0)
+    local botWorld = hrp.Position - Vector3.new(0,3.0,0)
+    local sTop, onTop = Camera:WorldToViewportPoint(topWorld)
+    local sBot, onBot = Camera:WorldToViewportPoint(botWorld)
+
+    if sTop.Z <= 0 or sBot.Z <= 0 or (not onTop and not onBot) then hideESP(esp); return end
+
+    local boxH = math.abs(sBot.Y - sTop.Y)
+    if boxH < 3 or boxH > 4000 then hideESP(esp); return end
+
+    local boxW  = math.floor(boxH * 0.58)
+    local midX  = math.floor((sTop.X + sBot.X) * 0.5)
+    local topY  = math.floor(math.min(sTop.Y, sBot.Y))
+    local botY  = topY + boxH
+    local leftX = math.floor(midX - (boxW * 0.5))
+    local rightX = leftX + boxW
+
+    local hpRatio = math.clamp(hum.Health / (hum.MaxHealth > 0 and hum.MaxHealth or 100), 0, 1)
+    local hpColor = Color3.fromRGB(math.floor(255*(1-hpRatio)), math.floor(255*hpRatio), 50)
+    local customBoxCol  = getESPColor("box",  C.accent)
+    local customDistCol = getESPColor("dist", Color3.fromRGB(180,170,200))
+
+    -- staff / admin role (fk4v11 style: tag + role color on box & name)
+    local staffRole = Config.ESP_Roles and getStaffRole(player) or nil
+    local roleTag   = staffRole and (" ["..staffRole.Text.."]") or ""
+    local boxCol    = staffRole and staffRole.Color or customBoxCol
+    local nameCol   = staffRole and staffRole.Color or Color3.new(1,1,1)
+
+    -- Level / Rank from player attributes
+    local plLevel  = pcall(function() return player:GetAttribute("Level") end) and player:GetAttribute("Level") or nil
+    local plRank   = pcall(function() return player:GetAttribute("RankName") end) and player:GetAttribute("RankName") or nil
+    local rankInfo = getRankInfo(plRank)
+    local rankColor = rankInfo.Color
+
+    -- FiringAlert: check ClientState.ShotTimes if available
+    local isFiring = false
+    pcall(function()
+        if Config.ESP_FiringAlert and ClientState and ClientState.ShotTimes then
+            local lastShot = ClientState.ShotTimes[char]
+            if type(lastShot) == "number" and (os.clock() - lastShot) < 0.35 then
+                isFiring = true
+            end
+        end
+    end)
+
+    -- ═══ MOBILE RENDERER ═══
+    if MOBILE_MODE then
+        local r = esp.mRoot
+        if not r then hideESP(esp); return end
+        r.Visible = true
+        r.Position = UDim2.fromOffset(leftX, topY)
+        r.Size = UDim2.fromOffset(boxW, boxH)
+
+        if Config.ESP_Box then
+            if Config.ESP_BoxStyle == "Corner" then
+                esp.mBox.Visible = false
+                local cl = math.max(4, math.floor(boxW*0.25))
+                local ct = math.max(4, math.floor(boxH*0.25))
+                local mc = esp.mCorners
+                mc[1].Position=UDim2.fromOffset(0,0);              mc[1].Size=UDim2.fromOffset(cl,2)
+                mc[2].Position=UDim2.fromOffset(0,0);              mc[2].Size=UDim2.fromOffset(2,ct)
+                mc[3].Position=UDim2.fromOffset(boxW-cl,0);        mc[3].Size=UDim2.fromOffset(cl,2)
+                mc[4].Position=UDim2.fromOffset(boxW-2,0);         mc[4].Size=UDim2.fromOffset(2,ct)
+                mc[5].Position=UDim2.fromOffset(0,boxH-2);         mc[5].Size=UDim2.fromOffset(cl,2)
+                mc[6].Position=UDim2.fromOffset(0,boxH-ct);        mc[6].Size=UDim2.fromOffset(2,ct)
+                mc[7].Position=UDim2.fromOffset(boxW-cl,boxH-2);   mc[7].Size=UDim2.fromOffset(cl,2)
+                mc[8].Position=UDim2.fromOffset(boxW-2,boxH-ct);   mc[8].Size=UDim2.fromOffset(2,ct)
+                for i=1,8 do mc[i].BackgroundColor3=boxCol; mc[i].Visible=true end
+            else
+                for _,f in ipairs(esp.mCorners) do f.Visible=false end
+                esp.mBox.Position=UDim2.fromOffset(0,0)
+                esp.mBox.Size=UDim2.fromOffset(boxW,boxH)
+                local st = esp.mBox:FindFirstChildOfClass("UIStroke")
+                if st then st.Color=boxCol end
+                esp.mBox.Visible=true
+            end
+        else
+            esp.mBox.Visible=false
+            for _,f in ipairs(esp.mCorners) do f.Visible=false end
+        end
+
+        if Config.ESP_Names then
+            local nTxt   = (player.DisplayName or player.Name)..roleTag
+            local nCol   = nameCol
+            local glowCol = nil
+            if Config.ESP_Alerts and char then
+                local now = workspace:GetServerTimeNow()
+                local prot = char:GetAttribute("ProtectedUntil")
+                local band = char:GetAttribute("BandageEnds")
+                local arm  = char:GetAttribute("ArmorEnds")
+                if typeof(prot)=="number" and (prot-now)>0 then
+                    nTxt = nTxt.." [PROTECTED]"
+                    nCol = Color3.fromRGB(80,140,255)   -- blue
+                    glowCol = Color3.fromRGB(0,100,255)
+                    boxCol = Color3.fromRGB(0,80,255)   -- box blue
+                elseif typeof(band)=="number" and (band-now)>0 then
+                    nTxt = nTxt.." [HEALING]"
+                    nCol = Color3.fromRGB(80,255,120)   -- green
+                    glowCol = Color3.fromRGB(0,200,80)
+                    boxCol = Color3.fromRGB(0,200,80)   -- box green
+                elseif typeof(arm)=="number" and (arm-now)>0 then
+                    nTxt = nTxt.." [ARMORING]"
+                    nCol = Color3.fromRGB(160,160,160)  -- grey text
+                    glowCol = Color3.fromRGB(20,20,20)
+                    boxCol = Color3.fromRGB(15,15,15)   -- box black
+                end
+            end
+            if isFiring then
+                nTxt = nTxt.." [FIRING]"
+                nCol = Color3.fromRGB(255,50,50)        -- red
+                glowCol = Color3.fromRGB(220,0,0)
+                boxCol = Color3.fromRGB(220,0,0)        -- box red
+            end
+            esp.mName.Text = nTxt
+            esp.mName.TextColor3 = nCol
+            -- mobile glow: TextStrokeColor3 = colored shadow = shimmer, no background
+            esp.mName.TextStrokeTransparency = glowCol and 0.0 or 0.65
+            esp.mName.TextStrokeColor3 = glowCol or Color3.fromRGB(0,0,0)
+            esp.mName.Position = UDim2.fromOffset(math.floor(boxW*0.5), -2)
+            esp.mName.Visible = true
+        else esp.mName.Visible=false end
+
+        -- Level + Rank (mobile)
+        local showLv = Config.ESP_Level and plLevel ~= nil
+        local showRk = Config.ESP_Rank and plRank and plRank ~= ""
+        local headerY = -(Config.ESP_Names and 34 or 18)
+        if showLv and esp.mLevel then
+            esp.mLevel.Text = "Lv."..tostring(plLevel)
+            esp.mLevel.TextColor3 = Color3.fromRGB(255,235,120)
+            esp.mLevel.Position = UDim2.fromOffset(math.floor(boxW*0.5)-40, headerY)
+            esp.mLevel.Visible = true
+        elseif esp.mLevel then esp.mLevel.Visible=false end
+        if showRk and esp.mRank then
+            esp.mRank.Text = tostring(plRank)
+            esp.mRank.TextColor3 = rankColor
+            esp.mRank.Position = UDim2.fromOffset(math.floor(boxW*0.5)+(showLv and 20 or -30), headerY)
+            esp.mRank.Visible = true
+        elseif esp.mRank then esp.mRank.Visible=false end
+
+        if Config.ESP_Distance then
+            esp.mDist.Text = math.floor(dist3d).."m"
+            esp.mDist.TextColor3 = customDistCol
+            esp.mDist.Position = UDim2.fromOffset(math.floor(boxW*0.5), boxH+2)
+            esp.mDist.Visible = true
+        else esp.mDist.Visible=false end
+
+        if Config.ESP_Health then
+            esp.mHpBg.Position=UDim2.fromOffset(-7,0); esp.mHpBg.Size=UDim2.fromOffset(3,boxH); esp.mHpBg.Visible=true
+            esp.mHp.Position=UDim2.fromOffset(-7,math.floor(boxH*(1-hpRatio)))
+            esp.mHp.Size=UDim2.fromOffset(3,math.max(1,math.floor(boxH*hpRatio)))
+            esp.mHp.BackgroundColor3=hpColor; esp.mHp.Visible=true
+        else esp.mHp.Visible=false; esp.mHpBg.Visible=false end
+        return
+    end
+    -- ═══ END MOBILE RENDERER ═══
+
+    -- ═══ PC Drawing ESP ═══
+    if Config.ESP_Box then
+        if Config.ESP_BoxStyle == "Corner" then
+            for _,l in ipairs(esp.box) do l.Visible=false end
+            local cl=math.floor(boxW*0.25); local ct=math.floor(boxH*0.25)
+            esp.corners[1].From=Vector2.new(leftX,topY);  esp.corners[1].To=Vector2.new(leftX+cl,topY)
+            esp.corners[2].From=Vector2.new(leftX,topY);  esp.corners[2].To=Vector2.new(leftX,topY+ct)
+            esp.corners[3].From=Vector2.new(rightX,topY); esp.corners[3].To=Vector2.new(rightX-cl,topY)
+            esp.corners[4].From=Vector2.new(rightX,topY); esp.corners[4].To=Vector2.new(rightX,topY+ct)
+            esp.corners[5].From=Vector2.new(leftX,botY);  esp.corners[5].To=Vector2.new(leftX+cl,botY)
+            esp.corners[6].From=Vector2.new(leftX,botY);  esp.corners[6].To=Vector2.new(leftX,botY-ct)
+            esp.corners[7].From=Vector2.new(rightX,botY); esp.corners[7].To=Vector2.new(rightX-cl,botY)
+            esp.corners[8].From=Vector2.new(rightX,botY); esp.corners[8].To=Vector2.new(rightX,botY-ct)
+            for i=1,8 do esp.corners[i].Color=boxCol; esp.corners[i].Visible=true end
+        else
+            for _,l in ipairs(esp.corners) do l.Visible=false end
+            esp.box[1].From=Vector2.new(leftX,topY);  esp.box[1].To=Vector2.new(rightX,topY)
+            esp.box[2].From=Vector2.new(rightX,topY); esp.box[2].To=Vector2.new(rightX,botY)
+            esp.box[3].From=Vector2.new(rightX,botY); esp.box[3].To=Vector2.new(leftX,botY)
+            esp.box[4].From=Vector2.new(leftX,botY);  esp.box[4].To=Vector2.new(leftX,topY)
+            for i=1,4 do esp.box[i].Color=boxCol; esp.box[i].Visible=true end
+        end
+    else
+        for _,l in ipairs(esp.box) do l.Visible=false end
+        for _,l in ipairs(esp.corners) do l.Visible=false end
+    end
+
+    if Config.ESP_Names then
+        local nTxt = (player.DisplayName or player.Name)..roleTag
+        local nCol = nameCol
+        local glowCol = nil  -- outline glow color for status shimmer
+        if Config.ESP_Alerts and char then
+            local now = workspace:GetServerTimeNow()
+            local prot = char:GetAttribute("ProtectedUntil")
+            local band = char:GetAttribute("BandageEnds")
+            local arm  = char:GetAttribute("ArmorEnds")
+            if typeof(prot)=="number" and (prot-now)>0 then
+                nTxt = nTxt.." [PROTECTED]"
+                nCol = Color3.fromRGB(80,140,255)      -- blue
+                glowCol = Color3.fromRGB(0,100,255)
+                boxCol = Color3.fromRGB(0,80,255)      -- box blue
+            elseif typeof(band)=="number" and (band-now)>0 then
+                nTxt = nTxt.." [HEALING]"
+                nCol = Color3.fromRGB(80,255,120)      -- green
+                glowCol = Color3.fromRGB(0,200,80)
+                boxCol = Color3.fromRGB(0,200,80)      -- box green
+            elseif typeof(arm)=="number" and (arm-now)>0 then
+                nTxt = nTxt.." [ARMORING]"
+                nCol = Color3.fromRGB(160,160,160)     -- grey text
+                glowCol = Color3.fromRGB(20,20,20)
+                boxCol = Color3.fromRGB(15,15,15)      -- box black
+            end
+        end
+        if isFiring then
+            nTxt = nTxt.." [FIRING]"
+            nCol = Color3.fromRGB(255,50,50)           -- red
+            glowCol = Color3.fromRGB(220,0,0)
+            boxCol = Color3.fromRGB(220,0,0)           -- box red
+        end
+        esp.name.Text = nTxt
+        esp.name.Position = Vector2.new(midX, topY-14)
+        esp.name.Color = nCol
+        -- shimmer: set outline color to glow color, outline=true already set at creation
+        if esp.name.Outline ~= nil then
+            esp.name.Outline = true
+            if glowCol then
+                -- Drawing outline = thick colored shadow = glow/shimmer effect, no bg needed
+                pcall(function() esp.name.OutlineColor = glowCol end)
+            else
+                pcall(function() esp.name.OutlineColor = Color3.fromRGB(0,0,0) end)
+            end
+        end
+        esp.name.Visible = true
+    else esp.name.Visible=false end
+
+    -- Level + Rank (PC Drawing)
+    local showLv = Config.ESP_Level and plLevel ~= nil
+    local showRk = Config.ESP_Rank  and plRank  and plRank ~= ""
+    if showLv or showRk then
+        local headerY = topY - (Config.ESP_Names and 32 or 16)
+        local lvStr  = showLv and ("Lv."..tostring(plLevel)) or ""
+        local rkStr  = showRk and tostring(plRank) or ""
+        local lvW    = showLv and (#lvStr * 8.5) or 0
+        local rkW    = showRk and (#rkStr * 7.2) or 0
+        local gap    = 5
+        local totalW = lvW + (lvW > 0 and gap or 0) + rkW
+        local curX   = midX - math.floor(totalW * 0.5)
+        if showLv and esp.level then
+            esp.level.Text     = lvStr
+            esp.level.Size     = 15
+            esp.level.Color    = Color3.fromRGB(255,235,120)
+            esp.level.Position = Vector2.new(math.floor(curX), math.floor(headerY))
+            esp.level.Visible  = true
+            curX = curX + lvW + gap
+        elseif esp.level then esp.level.Visible = false end
+        if showRk and esp.rank then
+            esp.rank.Text     = rkStr
+            esp.rank.Size     = 13
+            esp.rank.Color    = rankColor
+            esp.rank.Position = Vector2.new(math.floor(curX), math.floor(headerY+1))
+            esp.rank.Visible  = true
+        elseif esp.rank then esp.rank.Visible = false end
+    else
+        if esp.level then esp.level.Visible = false end
+        if esp.rank  then esp.rank.Visible  = false end
+    end
+
+    if Config.ESP_Distance then
+        esp.dist.Text = math.floor(dist3d).."m"
+        esp.dist.Position = Vector2.new(midX, botY+2)
+        esp.dist.Color = customDistCol
+        esp.dist.Visible = true
+    else esp.dist.Visible=false end
+
+    if Config.ESP_Health then
+        local barH = math.floor(boxH*hpRatio)
+        esp.healthBg.From=Vector2.new(leftX-5,topY); esp.healthBg.To=Vector2.new(leftX-5,botY); esp.healthBg.Visible=true
+        esp.health.From=Vector2.new(leftX-5,botY-barH); esp.health.To=Vector2.new(leftX-5,botY)
+        esp.health.Color=hpColor; esp.health.Visible=true
+    else esp.health.Visible=false; esp.healthBg.Visible=false end
+
+    if Config.ESP_Head and esp.head and head then
+        local hp, hOn = Camera:WorldToViewportPoint(head.Position)
+        if hOn and hp.Z > 0 then
+            esp.head.Position = Vector2.new(hp.X, hp.Y)
+            esp.head.Radius   = math.clamp(boxW*0.22, 2.5, 12)
+            esp.head.Color    = customBoxCol
+            esp.head.Visible  = true
+        else esp.head.Visible=false end
+    elseif esp.head then esp.head.Visible=false end
+
+    -- Skeleton (PC only, within 220 studs, behind ESP_Skeleton toggle)
+    if Config.ESP_Skeleton and dist3d < 220 then
+        local parts = esp._cachedParts
+        if not parts or esp._cachedChar ~= char then
+            parts = {}
+            for _, bone in ipairs(R15_BONES) do
+                parts[bone[1]] = char:FindFirstChild(bone[1])
+                parts[bone[2]] = char:FindFirstChild(bone[2])
+            end
+            esp._cachedParts = parts; esp._cachedChar = char
+        end
+        for i, bone in ipairs(R15_BONES) do
+            local p1, p2 = parts[bone[1]], parts[bone[2]]
+            if p1 and p2 then
+                local s1, on1 = Camera:WorldToViewportPoint(p1.Position)
+                local s2, on2 = Camera:WorldToViewportPoint(p2.Position)
+                if s1.Z>0 and s2.Z>0 and (on1 or on2) then
+                    esp.bones[i].From=Vector2.new(s1.X,s1.Y); esp.bones[i].To=Vector2.new(s2.X,s2.Y)
+                    esp.bones[i].Color=Color3.fromRGB(245,245,255); esp.bones[i].Visible=true
+                else esp.bones[i].Visible=false end
+            else esp.bones[i].Visible=false end
+        end
+    else
+        if esp.bones then for _,b in ipairs(esp.bones) do b.Visible=false end end
+    end
+
+    if Config.ESP_Tracers then
+        local vx2, vy2 = Camera.ViewportSize.X, Camera.ViewportSize.Y
+        esp.tracers.From=Vector2.new(vx2*0.5,vy2); esp.tracers.To=Vector2.new(midX,botY)
+        esp.tracers.Color=C.accent; esp.tracers.Visible=true
+    else esp.tracers.Visible=false end
+end
+
+-- ══════════════════════════════════════════════════════════════════
+--  LOOPS
+--  KEY FIX: ESP on RenderStepped (like TK4), aim scan on Heartbeat
+-- ══════════════════════════════════════════════════════════════════
+
+-- Aim scan: Heartbeat (fine for silent aim)
+local scanAccumulator = 0
+regConn(RunService.Heartbeat:Connect(function(dt)
+    pcall(function()
+        scanAccumulator = scanAccumulator + dt
+        if scanAccumulator >= 0.01 then
+            scanAccumulator = 0
+            pcall(scanBestTarget)
+        end
+
+        -- Speed boost
+        if Config.SpeedBoost and LP.Character then
+            local hrp = LP.Character:FindFirstChild("HumanoidRootPart")
+            local hum = LP.Character:FindFirstChildOfClass("Humanoid")
+            if hrp and hum and hum.Health > 0 then
+                local md = hum.MoveDirection
+                if md.Magnitude > 0.001 then
+                    local alv = hrp.AssemblyLinearVelocity
+                    local tv = md.Unit * math.clamp(Config.SpeedValue or 40, 16, 75)
+                    hrp.AssemblyLinearVelocity = Vector3.new(tv.X, alv.Y, tv.Z)
+                end
+            end
+        end
+
+        -- ClientState patches
+        if Config.InfiniteStamina and ClientState then
+            ClientState.Stamina = 100; ClientState.Exhausted = false
+        end
+        if Config.NoRecoil and ClientState then
+            ClientState.RecoilPitch = 0; ClientState.RecoilYaw = 0
+        end
+        if Config.NoBloom and ClientState then
+            ClientState.Spread = 0
+            if GameSettings then GameSettings.BloomScale = 0 end
+        end
+    end)
+end))
+
+-- ESP: RenderStepped — smooth 60fps box tracking (THE KEY FIX)
+regConn(RunService.RenderStepped:Connect(function()
+    pcall(function()
+        -- FOV circle update
+        if FOVCircle then
+            local vp = Camera.ViewportSize
+            FOVCircle.Position = Vector2.new(vp.X/2, vp.Y/2)
+            FOVCircle.Radius   = Config.FOVRadius
+            FOVCircle.Visible  = Config.DrawFOV
+        end
+
+        if Config.ESP_Master then
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LP then
+                    local ch  = p.Character
+                    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        if not State.ESPCache[p] then
+                            State.ESPCache[p] = createESP(p)
+                        end
+                        updateESP(p, State.ESPCache[p])
+                    elseif State.ESPCache[p] then
+                        hideESP(State.ESPCache[p])
+                    end
+                end
+            end
+        else
+            for _, esp in pairs(State.ESPCache) do hideESP(esp) end
+        end
+
+        -- Stale ESP cleanup
+        for key, esp in pairs(State.ESPCache) do
+            if typeof(key) == "Instance" and not key.Parent then
+                destroyESP(esp); State.ESPCache[key] = nil
+            end
+        end
+    end)
+end))
+
+-- Remove ESP when player leaves
+regConn(Players.PlayerRemoving:Connect(function(p)
+    local esp = State.ESPCache[p]
+    if esp then destroyESP(esp); State.ESPCache[p] = nil end
+end))
+
+-- Infinite jump
+regConn(UserInputService.JumpRequest:Connect(function()
+    if Config.InfiniteJump and LP.Character then
+        local hum = LP.Character:FindFirstChildOfClass("Humanoid")
+        local hrp = LP.Character:FindFirstChild("HumanoidRootPart")
+        if hum and hrp and hum.Health > 0 then
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+            local v = hrp.AssemblyLinearVelocity
+            hrp.AssemblyLinearVelocity = Vector3.new(v.X, 48, v.Z)
+        end
+    end
+end))
+
+-- ══════════════════════════════════════════════════════════════════
+--  UI
+-- ══════════════════════════════════════════════════════════════════
+
+local WIN_W, WIN_H, TITLE_H = 600, 440, 56
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "CLAN_V3_GUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 100
+pcall(function() if syn and syn.protect_gui then syn.protect_gui(ScreenGui) end end)
+pcall(function() ScreenGui.Parent = CoreGui end)
+if not ScreenGui.Parent then pcall(function() ScreenGui.Parent = LP:WaitForChild("PlayerGui") end) end
+
+local mainOuter = Instance.new("Frame", ScreenGui)
+mainOuter.Size = UDim2.new(0, WIN_W, 0, WIN_H)
+mainOuter.AnchorPoint = Vector2.new(0.5, 0.5)
+mainOuter.Position = UDim2.new(0.5, 0, 0.5, 0)
+mainOuter.BackgroundTransparency = 1
+mainOuter.BorderSizePixel = 0
+mainOuter.ClipsDescendants = true
+mainOuter.Active = true
+mainOuter.Visible = Config.GuiVisible
+Instance.new("UICorner", mainOuter).CornerRadius = UDim.new(0, 24)
+
+local mainStroke = Instance.new("UIStroke", mainOuter)
+mainStroke.Thickness = 1.4; mainStroke.Color = Color3.fromRGB(255,255,255)
+mainStroke.Transparency = 0.2; mainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+local msGrad = Instance.new("UIGradient", mainStroke)
+msGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(130,20,170)),
+    ColorSequenceKeypoint.new(0.5, C.accent),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(130,20,170))
+})
+task.spawn(function() while mainOuter.Parent do msGrad.Rotation=(msGrad.Rotation+1.6)%360; task.wait(0.066) end end)
+
+local bgImg = Instance.new("ImageLabel", mainOuter)
+bgImg.Size=UDim2.new(1,0,1,0); bgImg.BackgroundTransparency=1; bgImg.ZIndex=1
+bgImg.Image=BRAND.LogoId; bgImg.ScaleType=Enum.ScaleType.Crop; bgImg.ImageTransparency=0.20
+Instance.new("UICorner", bgImg).CornerRadius = UDim.new(0, 24)
+
+local bgDark = Instance.new("Frame", mainOuter)
+bgDark.Size=UDim2.new(1,0,1,0); bgDark.BackgroundColor3=Color3.fromRGB(6,4,10)
+bgDark.BackgroundTransparency=0.35; bgDark.BorderSizePixel=0; bgDark.ZIndex=1
+Instance.new("UICorner", bgDark).CornerRadius = UDim.new(0, 24)
+
+local titleBar = Instance.new("Frame", mainOuter)
+titleBar.Size=UDim2.new(1,0,0,TITLE_H); titleBar.BackgroundTransparency=1
+titleBar.BorderSizePixel=0; titleBar.Active=true; titleBar.ZIndex=5
+
+-- Drag
+do
+    local dragging, dragStartPos, startPos = false, Vector2.zero, UDim2.new()
+    titleBar.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging=true; dragStartPos=Vector2.new(inp.Position.X,inp.Position.Y); startPos=mainOuter.Position
+        end
+    end)
+    regConn(UserInputService.InputEnded:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then dragging=false end
+    end))
+    regConn(UserInputService.InputChanged:Connect(function(inp)
+        if dragging and (inp.UserInputType==Enum.UserInputType.MouseMovement or inp.UserInputType==Enum.UserInputType.Touch) then
+            local d=Vector2.new(inp.Position.X,inp.Position.Y)-dragStartPos
+            mainOuter.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,startPos.Y.Scale,startPos.Y.Offset+d.Y)
+        end
+    end))
+end
+
+-- Avatar
+local avatarBg = Instance.new("Frame", titleBar)
+avatarBg.Size=UDim2.new(0,40,0,40); avatarBg.Position=UDim2.new(0,14,0.5,-20)
+avatarBg.BackgroundColor3=Color3.fromRGB(12,8,18); avatarBg.BorderSizePixel=0; avatarBg.ZIndex=6
+Instance.new("UICorner", avatarBg).CornerRadius=UDim.new(0,20)
+local avs=Instance.new("UIStroke",avatarBg); avs.Color=C.accent; avs.Thickness=2
+local avatarImg=Instance.new("ImageLabel",avatarBg)
+avatarImg.Size=UDim2.new(1,-6,1,-6); avatarImg.Position=UDim2.new(0,3,0,3)
+avatarImg.BackgroundTransparency=1; avatarImg.ScaleType=Enum.ScaleType.Crop; avatarImg.ZIndex=7
+Instance.new("UICorner",avatarImg).CornerRadius=UDim.new(0,17)
+task.spawn(function()
+    local ok, thumb = pcall(function() return Players:GetUserThumbnailAsync(LP.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150) end)
+    if ok and thumb then avatarImg.Image=thumb end
+end)
+
+local titleLbl=Instance.new("TextLabel",titleBar)
+titleLbl.Size=UDim2.new(0,320,0,18); titleLbl.Position=UDim2.new(0,66,0,10)
+titleLbl.BackgroundTransparency=1; titleLbl.Text=BRAND.Full
+titleLbl.TextColor3=C.topTitle; titleLbl.Font=Enum.Font.GothamBlack; titleLbl.TextSize=15
+titleLbl.TextXAlignment=Enum.TextXAlignment.Left; titleLbl.ZIndex=6
+
+local subLbl=Instance.new("TextLabel",titleBar)
+subLbl.Size=UDim2.new(0,340,0,14); subLbl.Position=UDim2.new(0,66,0,30)
+subLbl.BackgroundTransparency=1; subLbl.Text='"'..BRAND.Motto..'" | RESPECT PVP'
+subLbl.TextColor3=C.topSub; subLbl.Font=Enum.Font.GothamBold; subLbl.TextSize=9
+subLbl.TextXAlignment=Enum.TextXAlignment.Left; subLbl.ZIndex=6
+
+local toggleMenu
+local CAM_SINK = "TK4_CamSink"
+local _savedCamType = nil
+
+-- TRUE ROOT FIX:
+-- task.defer only lasts 1 frame. The game's CameraScript uses ContextActionService
+-- to re-lock the mouse EVERY frame.
+-- Solution: set Camera.CameraType = Scriptable while menu is open
+-- (tells the engine to stop letting the CameraScript own the mouse)
+-- and restore Custom when menu closes.
+-- A high-priority ContextAction sink absorbs any remaining mouse-lock
+-- remaps from the game while the menu is open.
+
+local function openMenuMouse()
+    pcall(function()
+        _savedCamType = Camera.CameraType
+        Camera.CameraType = Enum.CameraType.Scriptable
+    end)
+    UserInputService.MouseBehavior    = Enum.MouseBehavior.Default
+    UserInputService.MouseIconEnabled = true
+    pcall(function()
+        ContextActionService:BindActionAtPriority(CAM_SINK,
+            function() return Enum.ContextActionResult.Sink end,
+            false,
+            3000,
+            Enum.UserInputType.MouseMovement,
+            Enum.UserInputType.MouseButton1,
+            Enum.UserInputType.MouseButton2
+        )
+    end)
+    if not GStore._TK4_MouseConn then
+        GStore._TK4_MouseConn = RunService.Heartbeat:Connect(function()
+            if not Config.GuiVisible then
+                if GStore._TK4_MouseConn then
+                    GStore._TK4_MouseConn:Disconnect()
+                    GStore._TK4_MouseConn = nil
+                end
+                return
+            end
+            if UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
+                UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+            end
+        end)
+    end
+end
+
+_G._TK4_openMenuMouse = openMenuMouse
+
+local function closeMenuMouse()
+    pcall(function() ContextActionService:UnbindAction(CAM_SINK) end)
+    if GStore._TK4_MouseConn then
+        pcall(function() GStore._TK4_MouseConn:Disconnect() end)
+        GStore._TK4_MouseConn = nil
+    end
+    pcall(function()
+        Camera.CameraType = _savedCamType or Enum.CameraType.Custom
+        _savedCamType = nil
+    end)
+    pcall(function()
+        UserInputService.MouseBehavior    = Enum.MouseBehavior.Default
+        UserInputService.MouseIconEnabled = false
+    end)
+end
+
+toggleMenu = function()
+    Config.GuiVisible = not Config.GuiVisible
+    mainOuter.Visible = Config.GuiVisible
+    if Config.GuiVisible then
+        openMenuMouse()
+    else
+        closeMenuMouse()
+    end
+end
+
+local minBtn=Instance.new("TextButton",titleBar)
+minBtn.Size=UDim2.new(0,26,0,26); minBtn.Position=UDim2.new(1,-72,0.5,-13)
+minBtn.BackgroundColor3=Color3.fromRGB(18,12,26); minBtn.Text="-"
+minBtn.TextColor3=Color3.fromRGB(235,235,235); minBtn.Font=Enum.Font.GothamBlack
+minBtn.TextSize=16; minBtn.ZIndex=7
+Instance.new("UICorner",minBtn).CornerRadius=UDim.new(0,13)
+minBtn.MouseButton1Click:Connect(toggleMenu)
+
+local closeBtn=Instance.new("TextButton",titleBar)
+closeBtn.Size=UDim2.new(0,26,0,26); closeBtn.Position=UDim2.new(1,-38,0.5,-13)
+closeBtn.BackgroundColor3=Color3.fromRGB(18,12,26); closeBtn.Text="X"
+closeBtn.TextColor3=Color3.fromRGB(240,240,240); closeBtn.Font=Enum.Font.GothamBlack
+closeBtn.TextSize=12; closeBtn.ZIndex=7
+Instance.new("UICorner",closeBtn).CornerRadius=UDim.new(0,13)
+closeBtn.MouseButton1Click:Connect(toggleMenu)
+
+-- ══════════════════════════════════════════════════════════════════════
+--  SIDEBAR  (style taken from TOXIC SLEEPY: icon + label rows)
+--  Rename labels / swap icons here only - the tab keys stay the same,
+--  so every toggle/stepper below keeps working untouched.
+-- ══════════════════════════════════════════════════════════════════════
+local SIDE_W=148
+local SIDE_TOP=TITLE_H
+
+local MAIN_TABS={"AIM","VISUALS","MOVE","CONFIG"}
+local TAB_DEFS={
+    AIM     = {label="aimbot",   icon="aim",      section="main"},
+    VISUALS = {label="visuals",  icon="visuals",  section="main"},
+    MOVE    = {label="movement", icon="movement", section="main"},
+    CONFIG  = {label="config",   icon="config",   section="settings"},
+}
+local activeMainTab="AIM"
+local mainTabBtns, mainTabFrames = {}, {}
+
+-- sidebar shell
+local sidebar=Instance.new("Frame",mainOuter)
+sidebar.Name="Sidebar"
+sidebar.Position=UDim2.new(0,0,0,SIDE_TOP)
+sidebar.Size=UDim2.new(0,SIDE_W,1,-SIDE_TOP)
+sidebar.BackgroundColor3=Color3.fromRGB(10,7,16)
+sidebar.BackgroundTransparency=0.12
+sidebar.BorderSizePixel=0
+sidebar.ZIndex=3
+local sbGrad=Instance.new("UIGradient",sidebar)
+sbGrad.Rotation=90
+sbGrad.Color=ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(20,13,32)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(8,5,13)),
+})
+
+-- separation line between sidebar and content
+local sideSep=Instance.new("Frame",mainOuter)
+sideSep.Name="SideSep"
+sideSep.Position=UDim2.new(0,SIDE_W,0,SIDE_TOP)
+sideSep.Size=UDim2.new(0,1,1,-SIDE_TOP)
+sideSep.BackgroundColor3=C.winBorder
+sideSep.BackgroundTransparency=0.25
+sideSep.BorderSizePixel=0
+sideSep.ZIndex=4
+
+-- content area (right of the sidebar)
+local CONTENT_Y=SIDE_TOP+10
+local CONTENT_H=WIN_H-CONTENT_Y-14
+local CONTENT_X=SIDE_W+13
+local contentArea=Instance.new("Frame",mainOuter)
+contentArea.Name="Content"
+contentArea.Size=UDim2.new(1,-(CONTENT_X+12),0,CONTENT_H)
+contentArea.Position=UDim2.new(0,CONTENT_X,0,CONTENT_Y)
+contentArea.BackgroundTransparency=1; contentArea.ZIndex=4
+
+-- content header (title + divider only, no function description)
+local headTitle=Instance.new("TextLabel",contentArea)
+headTitle.Name="HeadTitle"
+headTitle.Size=UDim2.new(1,0,0,20); headTitle.Position=UDim2.new(0,0,0,0)
+headTitle.BackgroundTransparency=1
+headTitle.Font=Enum.Font.GothamBlack; headTitle.TextSize=15
+headTitle.TextColor3=Color3.fromRGB(255,255,255)
+headTitle.TextXAlignment=Enum.TextXAlignment.Left
+headTitle.Text="AIMBOT"; headTitle.ZIndex=6
+
+local headLine=Instance.new("Frame",contentArea)
+headLine.Name="HeadLine"
+headLine.Size=UDim2.new(1,0,0,1); headLine.Position=UDim2.new(0,0,0,28)
+headLine.BackgroundColor3=C.winBorder; headLine.BackgroundTransparency=0.4
+headLine.BorderSizePixel=0; headLine.ZIndex=6
+
+-- icons are DRAWN with frames (no asset ids, no emoji -> always visible)
+local function tintIcon(holder, color)
+    local info=TweenInfo.new(0.14)
+    for _, ch in ipairs(holder:GetDescendants()) do
+        if ch:IsA("UIStroke") then
+            TweenService:Create(ch,info,{Color=color}):Play()
+        elseif ch:IsA("Frame") and ch.BackgroundTransparency < 1 then
+            TweenService:Create(ch,info,{BackgroundColor3=color}):Play()
+        end
+    end
+end
+
+-- repaint one sidebar row (active / hover / idle)
+local function paintRow(key, active, hovered)
+    local row=mainTabBtns[key]; if not row then return end
+    local bg=row:FindFirstChild("ActiveBg")
+    if active and not bg then
+        bg=Instance.new("Frame",row)
+        bg.Name="ActiveBg"
+        bg.Size=UDim2.new(1,0,1,0)
+        bg.BackgroundColor3=Color3.fromRGB(34,22,54)
+        bg.BackgroundTransparency=0.25
+        bg.BorderSizePixel=0
+        bg.ZIndex=5
+        Instance.new("UICorner",bg).CornerRadius=UDim.new(0,8)
+        local st=Instance.new("UIStroke",bg)
+        st.Color=C.accent; st.Thickness=1; st.Transparency=0.7
+
+        local bar=Instance.new("Frame",row)
+        bar.Name="ActiveBar"
+        bar.Size=UDim2.new(0,3,0,16)
+        bar.Position=UDim2.new(0,0,0.5,-8)
+        bar.BackgroundColor3=C.accent
+        bar.BorderSizePixel=0
+        bar.ZIndex=8
+        Instance.new("UICorner",bar).CornerRadius=UDim.new(0,2)
+    elseif not active then
+        if bg then bg:Destroy() end
+        local bar=row:FindFirstChild("ActiveBar")
+        if bar then bar:Destroy() end
+    end
+    local info=TweenInfo.new(0.14)
+    TweenService:Create(row,info,{BackgroundTransparency = active and 1 or (hovered and 0.6 or 1)}):Play()
+    local lbl=row:FindFirstChild("Label")
+    if lbl then
+        local col=active and Color3.fromRGB(255,255,255)
+            or (hovered and Color3.fromRGB(220,212,235) or C.tabIdleTx)
+        TweenService:Create(lbl,info,{TextColor3=col}):Play()
+    end
+
+    local icon=row:FindFirstChild("Icon")
+    if icon then
+        local targetCol = active and C.accent
+            or (hovered and Color3.fromRGB(210,195,240) or C.tabIdleTx)
+        tintIcon(icon, targetCol)
+        -- scale bounce
+        local sc=icon:FindFirstChildOfClass("UIScale")
+        if sc then
+            TweenService:Create(sc,TweenInfo.new(0.18,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{
+                Scale = active and 1.12 or (hovered and 1.07 or 1)
+            }):Play()
+        end
+        -- glow chip
+        local chip=icon:FindFirstChild("Chip")
+        if chip then
+            TweenService:Create(chip,TweenInfo.new(0.18),{
+                BackgroundTransparency = active and 0.78 or (hovered and 0.92 or 1)
+            }):Play()
+        end
+        -- thicken UIStrokes on active for glow feel
+        for _,d in ipairs(icon:GetDescendants()) do
+            if d:IsA("UIStroke") then
+                TweenService:Create(d,TweenInfo.new(0.14),{
+                    Thickness = active and 2.2 or (hovered and 1.8 or 1.5)
+                }):Play()
+            end
+        end
+    end
+end
+
+local function switchMainTab(name)
+    activeMainTab=name
+    local def=TAB_DEFS[name]
+    if def then
+        headTitle.Text=string.upper(def.label)
+    end
+    for _,key in ipairs(MAIN_TABS) do
+        paintRow(key,key==name,false)
+        if mainTabFrames[key] then mainTabFrames[key].Visible=(key==name) end
+    end
+end
+
+-- section caption (premium: gradient text + thin accent line)
+local function makeSideSection(text,y)
+    local wrap=Instance.new("Frame",sidebar)
+    wrap.Size=UDim2.new(1,-16,0,14); wrap.Position=UDim2.new(0,8,0,y)
+    wrap.BackgroundTransparency=1; wrap.BorderSizePixel=0; wrap.ZIndex=6
+
+    -- left accent pip
+    local pip=Instance.new("Frame",wrap)
+    pip.Size=UDim2.new(0,2,0,10); pip.Position=UDim2.new(0,0,0.5,-5)
+    pip.BackgroundColor3=C.accent; pip.BackgroundTransparency=0.4; pip.BorderSizePixel=0; pip.ZIndex=7
+    Instance.new("UICorner",pip).CornerRadius=UDim.new(0,1)
+
+    local g=Instance.new("TextLabel",wrap)
+    g.Size=UDim2.new(1,-10,1,0); g.Position=UDim2.new(0,8,0,0)
+    g.BackgroundTransparency=1
+    g.Text=string.upper(text); g.TextColor3=C.topSub
+    g.TextTransparency=0.0
+    g.Font=Enum.Font.GothamBlack; g.TextSize=8.5
+    g.TextXAlignment=Enum.TextXAlignment.Left
+    g.ZIndex=7
+    -- subtle gradient on text
+    local tg=Instance.new("UIGradient",g)
+    tg.Color=ColorSequence.new({
+        ColorSequenceKeypoint.new(0,Color3.fromRGB(180,140,230)),
+        ColorSequenceKeypoint.new(1,Color3.fromRGB(130,100,180)),
+    })
+    tg.Rotation=0
+
+    -- thin separator line after text
+    local sep=Instance.new("Frame",wrap)
+    sep.Size=UDim2.new(1,0,0,1); sep.Position=UDim2.new(0,0,1,2)
+    sep.BackgroundColor3=C.accent; sep.BackgroundTransparency=0.82; sep.BorderSizePixel=0; sep.ZIndex=6
+    local sg2=Instance.new("UIGradient",sep)
+    sg2.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(0.6,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.fromRGB(0,0,0))})
+
+    return wrap
+end
+
+-- ── PREMIUM ICON SYSTEM ─────────────────────────────────────────────────────
+-- Each icon: 24x24 canvas, pixel-precise frame shapes, animated glow chip,
+-- gradient stroke on active, UIScale for hover bounce.
+local function makeSideIcon(parent, kind)
+    -- outer holder (24x24, vertically centered)
+    local holder=Instance.new("Frame",parent)
+    holder.Name="Icon"
+    holder.Size=UDim2.new(0,24,0,24)
+    holder.Position=UDim2.new(0,10,0.5,-12)
+    holder.BackgroundTransparency=1
+    holder.BorderSizePixel=0
+    holder.ZIndex=7
+    local usc=Instance.new("UIScale",holder); usc.Scale=1
+
+    -- animated glow chip (shown when active)
+    local chip=Instance.new("Frame",holder)
+    chip.Name="Chip"
+    chip.AnchorPoint=Vector2.new(0.5,0.5)
+    chip.Position=UDim2.new(0.5,0,0.5,0)
+    chip.Size=UDim2.new(0,34,0,34)
+    chip.BackgroundColor3=C.accent
+    chip.BackgroundTransparency=1
+    chip.BorderSizePixel=0
+    chip.ZIndex=5
+    Instance.new("UICorner",chip).CornerRadius=UDim.new(0,10)
+    -- subtle inner glow gradient on chip
+    local cg=Instance.new("UIGradient",chip)
+    cg.Color=ColorSequence.new({
+        ColorSequenceKeypoint.new(0,Color3.fromRGB(160,80,255)),
+        ColorSequenceKeypoint.new(1,Color3.fromRGB(90,30,180)),
+    })
+    cg.Rotation=135
+
+    -- helper: solid rect piece
+    local function px(nm,sz,pos,rad,alpha)
+        local f=Instance.new("Frame",holder)
+        f.Name=nm; f.Size=sz; f.Position=pos
+        f.BackgroundColor3=C.tabIdleTx
+        f.BackgroundTransparency=alpha or 0
+        f.BorderSizePixel=0; f.ZIndex=8
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,rad or 0)
+        return f
+    end
+
+    -- helper: outlined ring (hollow circle)
+    local function ring(nm,sz,pos,rad,thick)
+        local f=Instance.new("Frame",holder)
+        f.Name=nm; f.Size=sz; f.Position=pos
+        f.BackgroundTransparency=1; f.BorderSizePixel=0; f.ZIndex=8
+        Instance.new("UICorner",f).CornerRadius=UDim.new(0,rad)
+        local st=Instance.new("UIStroke",f)
+        st.Thickness=thick or 1.5; st.Color=C.tabIdleTx; st.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+        return f,st
+    end
+
+    if kind=="aim" then
+        -- Precision crosshair: outer ring + 4 gap ticks + center diamond
+        local r,rst=ring("Ring",UDim2.new(0,20,0,20),UDim2.new(0,2,0,2),10,1.6)
+        -- outer corner notches (top/bottom/left/right gaps)
+        px("GapT",UDim2.new(0,4,0,5),UDim2.new(0,10,0,-1),0,0)   -- mask top gap
+        px("GapB",UDim2.new(0,4,0,5),UDim2.new(0,10,0,20),0,0)   -- mask bot gap
+        px("GapL",UDim2.new(0,5,0,4),UDim2.new(0,-1,0,10),0,0)
+        px("GapR",UDim2.new(0,5,0,4),UDim2.new(0,20,0,10),0,0)
+        -- center diamond dot
+        local dot=px("Dot",UDim2.new(0,5,0,5),UDim2.new(0,9.5,0,9.5),1)
+        dot.Rotation=45
+        -- four tick lines
+        px("TL",UDim2.new(0,1.5,0,4),UDim2.new(0,11.25,0,2),1)
+        px("TB",UDim2.new(0,1.5,0,4),UDim2.new(0,11.25,0,18),1)
+        px("TLL",UDim2.new(0,4,0,1.5),UDim2.new(0,2,0,11.25),1)
+        px("TRR",UDim2.new(0,4,0,1.5),UDim2.new(0,18,0,11.25),1)
+
+    elseif kind=="visuals" then
+        -- Premium eye: outer lens shape + inner iris ring + pupil + glint
+        local lens=px("Lens",UDim2.new(0,22,0,14),UDim2.new(0,1,0,5),7,1)
+        local lst=Instance.new("UIStroke",lens); lst.Thickness=1.6; lst.Color=C.tabIdleTx
+        lens.BackgroundTransparency=1
+        -- iris ring
+        local iris,_=ring("Iris",UDim2.new(0,10,0,10),UDim2.new(0,7,0,7),5,1.4)
+        -- filled pupil
+        px("Pupil",UDim2.new(0,5,0,5),UDim2.new(0,9.5,0,9.5),3)
+        -- glint top-right
+        px("Glint",UDim2.new(0,2.5,0,2.5),UDim2.new(0,14,0,7),2,0.3)
+        -- eyelash curves (top arc line segments)
+        px("LashL",UDim2.new(0,5,0,1.5),UDim2.new(0,1,0,4),1,0.5)
+        px("LashR",UDim2.new(0,5,0,1.5),UDim2.new(0,18,0,4),1,0.5)
+
+    elseif kind=="movement" then
+        -- Lightning bolt / speed chevrons: bold double arrow pointing right
+        -- Arrow 1 (front, full opacity)
+        local a1t=px("A1T",UDim2.new(0,2,0,9),UDim2.new(0,5,0,3),1)
+        a1t.AnchorPoint=Vector2.new(0.5,1); a1t.Rotation=35
+        local a1b=px("A1B",UDim2.new(0,2,0,9),UDim2.new(0,5,0,12),1)
+        a1b.AnchorPoint=Vector2.new(0.5,0); a1b.Rotation=-35
+        -- Arrow 2 (back, dimmed)
+        local a2t=px("A2T",UDim2.new(0,2,0,9),UDim2.new(0,12,0,3),1,0.45)
+        a2t.AnchorPoint=Vector2.new(0.5,1); a2t.Rotation=35
+        local a2b=px("A2B",UDim2.new(0,2,0,9),UDim2.new(0,12,0,12),1,0.45)
+        a2b.AnchorPoint=Vector2.new(0.5,0); a2b.Rotation=-35
+        -- speed dot trail
+        px("D1",UDim2.new(0,3,0,3),UDim2.new(0,17,0,10.5),2,0.3)
+        px("D2",UDim2.new(0,2,0,2),UDim2.new(0,21,0,11),1,0.55)
+
+    elseif kind=="config" then
+        -- Precision sliders: 3 horizontal tracks + moveable knobs (premium EQ look)
+        -- Track 1
+        px("T1",UDim2.new(0,20,0,1.5),UDim2.new(0,2,0,4),1,0.45)
+        local k1=px("K1",UDim2.new(0,6,0,6),UDim2.new(0,4,0,1.5),3)
+        local k1i=Instance.new("UIStroke",k1); k1i.Thickness=1.2; k1i.Color=C.tabIdleTx
+        k1i.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+        -- Track 2
+        px("T2",UDim2.new(0,20,0,1.5),UDim2.new(0,2,0,11),1,0.45)
+        local k2=px("K2",UDim2.new(0,6,0,6),UDim2.new(0,12,0,8.5),3)
+        local k2i=Instance.new("UIStroke",k2); k2i.Thickness=1.2; k2i.Color=C.tabIdleTx
+        k2i.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+        -- Track 3
+        px("T3",UDim2.new(0,20,0,1.5),UDim2.new(0,2,0,18),1,0.45)
+        local k3=px("K3",UDim2.new(0,6,0,6),UDim2.new(0,7,0,15.5),3)
+        local k3i=Instance.new("UIStroke",k3); k3i.Thickness=1.2; k3i.Color=C.tabIdleTx
+        k3i.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+    else
+        -- fallback: clean hexagonal dot
+        local dot=px("Dot",UDim2.new(0,12,0,12),UDim2.new(0,6,0,6),4,1)
+        local dst=Instance.new("UIStroke",dot); dst.Thickness=1.5; dst.Color=C.tabIdleTx
+    end
+
+    return holder
+end
+
+-- build rows
+local sideY=12
+local currentSection=nil
+for _,key in ipairs(MAIN_TABS) do
+    local def=TAB_DEFS[key]
+    if def.section~=currentSection then
+        if currentSection~=nil then sideY=sideY+12 end
+        makeSideSection(def.section,sideY)
+        sideY=sideY+22
+        currentSection=def.section
+    end
+
+    local btn=Instance.new("TextButton",sidebar)
+    btn.Name="SideTab_"..key
+    btn.AutoButtonColor=false
+    btn.Text=""
+    btn.BackgroundColor3=Color3.fromRGB(26,18,42)
+    btn.BackgroundTransparency=1
+    btn.Position=UDim2.new(0,10,0,sideY)
+    btn.Size=UDim2.new(1,-20,0,34)
+    btn.ZIndex=6
+    Instance.new("UICorner",btn).CornerRadius=UDim.new(0,8)
+
+    makeSideIcon(btn, def.icon)
+
+    local lbl=Instance.new("TextLabel",btn)
+    lbl.Name="Label"
+    lbl.Size=UDim2.new(1,-54,1,0)
+    lbl.Position=UDim2.new(0,42,0,0)
+    lbl.BackgroundTransparency=1
+    lbl.Text=string.upper(def.label)
+    lbl.TextColor3=C.tabIdleTx
+    lbl.Font=Enum.Font.GothamBold
+    lbl.TextSize=11
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+    lbl.ZIndex=7
+
+    btn.MouseEnter:Connect(function()
+        if key~=activeMainTab then paintRow(key,false,true) end
+    end)
+    btn.MouseLeave:Connect(function()
+        if key~=activeMainTab then paintRow(key,false,false) end
+    end)
+    btn.MouseButton1Click:Connect(function() switchMainTab(key) end)
+
+    mainTabBtns[key]=btn
+    sideY=sideY+38
+end
+
+-- initial state
+for _,key in ipairs(MAIN_TABS) do
+    paintRow(key,key==activeMainTab,false)
+end
+
+local function makeTabScroll(name)
+    local scroll=Instance.new("ScrollingFrame",contentArea)
+    scroll.Name="Tab_"..name
+    scroll.Position=UDim2.new(0,0,0,36); scroll.Size=UDim2.new(1,0,1,-36)
+    scroll.BackgroundTransparency=1; scroll.BorderSizePixel=0
+    scroll.ScrollBarThickness=3; scroll.ScrollBarImageColor3=C.accent
+    scroll.AutomaticCanvasSize=Enum.AutomaticSize.Y; scroll.CanvasSize=UDim2.new(0,0,0,0)
+    scroll.Visible=(name==activeMainTab); scroll.ZIndex=4
+    local ll=Instance.new("UIListLayout",scroll)
+    ll.Padding=UDim.new(0,6); ll.SortOrder=Enum.SortOrder.LayoutOrder
+    local pad=Instance.new("UIPadding",scroll)
+    pad.PaddingRight=UDim.new(0,4); pad.PaddingTop=UDim.new(0,4); pad.PaddingBottom=UDim.new(0,8)
+    mainTabFrames[name]=scroll
+    return scroll
+end
+
+local function makeToggleRow(parent, label, defaultOn, onToggle)
+    local row=Instance.new("Frame",parent)
+    row.Size=UDim2.new(1,0,0,36); row.BackgroundColor3=C.rowBg
+    row.BackgroundTransparency=C.rowAlpha; row.BorderSizePixel=0
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,10)
+    local rs=Instance.new("UIStroke",row); rs.Color=C.rowStroke; rs.Thickness=1
+    local lbl=Instance.new("TextLabel",row)
+    lbl.Size=UDim2.new(0.68,0,1,0); lbl.Position=UDim2.new(0,12,0,0)
+    lbl.BackgroundTransparency=1; lbl.Text=label; lbl.TextColor3=C.rowLabel
+    lbl.Font=Enum.Font.Gotham; lbl.TextSize=12; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local pill=Instance.new("Frame",row)
+    pill.Name="Pill"
+    pill.Size=UDim2.new(0,46,0,24); pill.Position=UDim2.new(1,-58,0.5,-12); pill.BorderSizePixel=0
+    pill.ZIndex=3
+    Instance.new("UICorner",pill).CornerRadius=UDim.new(0,12)
+    local pStroke=Instance.new("UIStroke",pill)
+    pStroke.Thickness=1; pStroke.Color=C.rowStroke; pStroke.Transparency=0.2
+    local dot=Instance.new("Frame",pill)
+    dot.Name="Dot"
+    dot.Size=UDim2.new(0,18,0,18); dot.BorderSizePixel=0; dot.BackgroundColor3=Color3.fromRGB(255,255,255)
+    dot.ZIndex=4
+    Instance.new("UICorner",dot).CornerRadius=UDim.new(0,9)
+    local on=defaultOn
+    local function updatePill()
+        local ti=TweenInfo.new(0.14)
+        TweenService:Create(pill,ti,{BackgroundColor3=on and C.pillOn or C.pillOff}):Play()
+        TweenService:Create(pStroke,ti,{
+            Color=on and C.accent or C.rowStroke,
+            Transparency=on and 0 or 0.2
+        }):Play()
+        TweenService:Create(dot,ti,{
+            Position=on and UDim2.new(1,-21,0.5,-9) or UDim2.new(0,3,0.5,-9)
+        }):Play()
+    end
+    updatePill()
+    local btn=Instance.new("TextButton",row)
+    btn.Size=UDim2.new(1,0,1,0); btn.BackgroundTransparency=1; btn.Text=""
+    btn.MouseButton1Click:Connect(function() on=not on; updatePill(); if onToggle then pcall(onToggle,on) end end)
+    return row
+end
+
+local function makeStepperRow(parent, label, defaultVal, minVal, maxVal, step, onChange)
+    local row=Instance.new("Frame",parent)
+    row.Size=UDim2.new(1,0,0,36); row.BackgroundColor3=C.rowBg
+    row.BackgroundTransparency=C.rowAlpha; row.BorderSizePixel=0
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,10)
+    local rs=Instance.new("UIStroke",row); rs.Color=C.rowStroke; rs.Thickness=1
+    local lbl=Instance.new("TextLabel",row)
+    lbl.Size=UDim2.new(0.55,0,1,0); lbl.Position=UDim2.new(0,12,0,0)
+    lbl.BackgroundTransparency=1; lbl.Text=label; lbl.TextColor3=C.rowLabel
+    lbl.Font=Enum.Font.Gotham; lbl.TextSize=12; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local cur=defaultVal or minVal
+    local valLbl=Instance.new("TextLabel",row)
+    valLbl.Size=UDim2.new(0.18,0,1,0); valLbl.Position=UDim2.new(0.55,0,0,0)
+    valLbl.BackgroundTransparency=1; valLbl.Text=tostring(cur)
+    valLbl.TextColor3=C.rowValue; valLbl.Font=Enum.Font.GothamBold; valLbl.TextSize=12
+    local function setVal(v)
+        cur=math.clamp(v,minVal,maxVal); valLbl.Text=tostring(cur)
+        if onChange then pcall(onChange,cur) end
+    end
+    local dec=Instance.new("TextButton",row)
+    dec.Size=UDim2.new(0,26,0,22); dec.Position=UDim2.new(1,-58,0.5,-11)
+    dec.BackgroundColor3=Color3.fromRGB(24,18,36); dec.Text="-"; dec.TextColor3=C.accent
+    dec.Font=Enum.Font.GothamBold; dec.TextSize=13
+    Instance.new("UICorner",dec).CornerRadius=UDim.new(0,6)
+    dec.MouseButton1Click:Connect(function() setVal(cur-step) end)
+    local inc=Instance.new("TextButton",row)
+    inc.Size=UDim2.new(0,26,0,22); inc.Position=UDim2.new(1,-28,0.5,-11)
+    inc.BackgroundColor3=Color3.fromRGB(24,18,36); inc.Text="+"; inc.TextColor3=C.accent
+    inc.Font=Enum.Font.GothamBold; inc.TextSize=13
+    Instance.new("UICorner",inc).CornerRadius=UDim.new(0,6)
+    inc.MouseButton1Click:Connect(function() setVal(cur+step) end)
+    return row
+end
+
+local function makeButtonRow(parent, label, btnText, onClick)
+    local row=Instance.new("Frame",parent)
+    row.Size=UDim2.new(1,0,0,36); row.BackgroundColor3=C.rowBg
+    row.BackgroundTransparency=C.rowAlpha; row.BorderSizePixel=0
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,10)
+    local rs=Instance.new("UIStroke",row); rs.Color=C.rowStroke; rs.Thickness=1
+    local lbl=Instance.new("TextLabel",row)
+    lbl.Size=UDim2.new(0.55,0,1,0); lbl.Position=UDim2.new(0,12,0,0)
+    lbl.BackgroundTransparency=1; lbl.Text=label; lbl.TextColor3=C.rowLabel
+    lbl.Font=Enum.Font.Gotham; lbl.TextSize=12; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local b=Instance.new("TextButton",row)
+    b.Size=UDim2.new(0,90,0,24); b.Position=UDim2.new(1,-98,0.5,-12)
+    b.BackgroundColor3=C.accentDim; b.Text=btnText; b.TextColor3=Color3.new(1,1,1)
+    b.Font=Enum.Font.GothamBold; b.TextSize=11
+    Instance.new("UICorner",b).CornerRadius=UDim.new(0,6)
+    b.MouseButton1Click:Connect(function() if onClick then pcall(onClick) end end)
+    return row
+end
+
+-- Build pages
+local aimPage  = makeTabScroll("AIM")
+local visPage  = makeTabScroll("VISUALS")
+local movePage = makeTabScroll("MOVE")
+local cfgPage  = makeTabScroll("CONFIG")
+
+-- AIM tab
+makeToggleRow(aimPage, "Silent Aim",                Config.SilentAim,     function(v) Config.SilentAim=v end)
+do
+    -- HEAD / BODY split row
+    local splitRow = Instance.new("Frame", aimPage)
+    splitRow.Size = UDim2.new(1, 0, 0, 56)
+    splitRow.BackgroundColor3 = C.rowBg
+    splitRow.BackgroundTransparency = C.rowAlpha
+    splitRow.BorderSizePixel = 0
+    Instance.new("UICorner", splitRow).CornerRadius = UDim.new(0, 10)
+    local rs2 = Instance.new("UIStroke", splitRow); rs2.Color = C.rowStroke; rs2.Thickness = 1
+
+    -- label top
+    local splitLbl = Instance.new("TextLabel", splitRow)
+    splitLbl.Size = UDim2.new(1, -16, 0, 14)
+    splitLbl.Position = UDim2.new(0, 12, 0, 6)
+    splitLbl.BackgroundTransparency = 1
+    splitLbl.Text = "Headshot Ratio"
+    splitLbl.TextColor3 = C.rowLabel
+    splitLbl.Font = Enum.Font.Gotham
+    splitLbl.TextSize = 12
+    splitLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- percentage labels
+    local headPct = Instance.new("TextLabel", splitRow)
+    headPct.Size = UDim2.new(0, 60, 0, 12)
+    headPct.Position = UDim2.new(0, 12, 0, 22)
+    headPct.BackgroundTransparency = 1
+    headPct.Font = Enum.Font.GothamBold; headPct.TextSize = 11
+    headPct.TextXAlignment = Enum.TextXAlignment.Left
+    headPct.TextColor3 = Color3.fromRGB(180, 100, 255)
+
+    local bodyPct = Instance.new("TextLabel", splitRow)
+    bodyPct.Size = UDim2.new(0, 80, 0, 12)
+    bodyPct.Position = UDim2.new(1, -92, 0, 22)
+    bodyPct.BackgroundTransparency = 1
+    bodyPct.Font = Enum.Font.GothamBold; bodyPct.TextSize = 11
+    bodyPct.TextXAlignment = Enum.TextXAlignment.Right
+    bodyPct.TextColor3 = Color3.fromRGB(100, 200, 255)
+
+    -- bar background
+    local barBg = Instance.new("Frame", splitRow)
+    barBg.Size = UDim2.new(1, -24, 0, 8)
+    barBg.Position = UDim2.new(0, 12, 0, 38)
+    barBg.BackgroundColor3 = Color3.fromRGB(30, 20, 50)
+    barBg.BorderSizePixel = 0
+    Instance.new("UICorner", barBg).CornerRadius = UDim.new(0, 4)
+
+    -- head fill (purple)
+    local headFill = Instance.new("Frame", barBg)
+    headFill.Position = UDim2.new(0, 0, 0, 0)
+    headFill.BackgroundColor3 = Color3.fromRGB(130, 68, 255)
+    headFill.BorderSizePixel = 0
+    Instance.new("UICorner", headFill).CornerRadius = UDim.new(0, 4)
+
+    -- body fill (blue)
+    local bodyFill = Instance.new("Frame", barBg)
+    bodyFill.BackgroundColor3 = Color3.fromRGB(60, 160, 255)
+    bodyFill.BorderSizePixel = 0
+    Instance.new("UICorner", bodyFill).CornerRadius = UDim.new(0, 4)
+
+    local function updateSplitBar()
+        local h = math.clamp(Config.HeadRatio, 0, 100)
+        local b = 100 - h
+        headFill.Size = UDim2.new(h / 100, 0, 1, 0)
+        bodyFill.Size = UDim2.new(b / 100, 0, 1, 0)
+        bodyFill.Position = UDim2.new(h / 100, 0, 0, 0)
+        headPct.Text = "Head " .. h .. "%"
+        bodyPct.Text = "Body " .. b .. "%"
+    end
+    updateSplitBar()
+
+    -- dec / inc buttons
+    local dec2 = Instance.new("TextButton", splitRow)
+    dec2.Size = UDim2.new(0, 26, 0, 22); dec2.Position = UDim2.new(0, 12, 0, 20)
+    -- invisible, we use a bigger invisible overlay row below
+
+    -- stepper buttons on the right of label
+    local decBtn = Instance.new("TextButton", splitRow)
+    decBtn.Size = UDim2.new(0, 26, 0, 20)
+    decBtn.Position = UDim2.new(1, -62, 0, 4)
+    decBtn.BackgroundColor3 = Color3.fromRGB(24, 18, 36)
+    decBtn.Text = "-"; decBtn.TextColor3 = C.accent
+    decBtn.Font = Enum.Font.GothamBold; decBtn.TextSize = 13
+    Instance.new("UICorner", decBtn).CornerRadius = UDim.new(0, 6)
+    decBtn.MouseButton1Click:Connect(function()
+        Config.HeadRatio = math.clamp(Config.HeadRatio - 1, 0, 100)
+        updateSplitBar()
+    end)
+
+    local incBtn = Instance.new("TextButton", splitRow)
+    incBtn.Size = UDim2.new(0, 26, 0, 20)
+    incBtn.Position = UDim2.new(1, -32, 0, 4)
+    incBtn.BackgroundColor3 = Color3.fromRGB(24, 18, 36)
+    incBtn.Text = "+"; incBtn.TextColor3 = C.accent
+    incBtn.Font = Enum.Font.GothamBold; incBtn.TextSize = 13
+    Instance.new("UICorner", incBtn).CornerRadius = UDim.new(0, 6)
+    incBtn.MouseButton1Click:Connect(function()
+        Config.HeadRatio = math.clamp(Config.HeadRatio + 1, 0, 100)
+        updateSplitBar()
+    end)
+
+    -- cleanup the invisible extra button
+    dec2:Destroy()
+end
+makeStepperRow(aimPage,"FOV Radius",                 Config.FOVRadius, 40, 500, 10, function(v) Config.FOVRadius=v; if FOVCircle then FOVCircle.Radius=v end end)
+makeToggleRow(aimPage, "Draw FOV Circle",           Config.DrawFOV,       function(v) Config.DrawFOV=v; if FOVCircle then FOVCircle.Visible=v end end)
+makeToggleRow(aimPage, "Wall Check",                Config.WallCheck,     function(v) Config.WallCheck=v end)
+makeToggleRow(aimPage, "Team Check",                Config.TeamCheck,     function(v) Config.TeamCheck=v; Config.ESP_TeamCheck=v end)
+makeToggleRow(aimPage, "No Recoil",                 Config.NoRecoil,      function(v) Config.NoRecoil=v end)
+makeToggleRow(aimPage, "No Bloom",                  Config.NoBloom,       function(v) Config.NoBloom=v end)
+
+-- VISUALS tab
+makeToggleRow(visPage, "ESP Master Switch",         Config.ESP_Master,    function(v) Config.ESP_Master=v end)
+makeToggleRow(visPage, "Player Box ESP",            Config.ESP_Box,       function(v) Config.ESP_Box=v end)
+makeToggleRow(visPage, "Health Bar",                Config.ESP_Health,    function(v) Config.ESP_Health=v end)
+makeToggleRow(visPage, "Player Names",              Config.ESP_Names,     function(v) Config.ESP_Names=v end)
+makeToggleRow(visPage, "Distance Labels",           Config.ESP_Distance,  function(v) Config.ESP_Distance=v end)
+makeToggleRow(visPage, "Snapline Tracers",          Config.ESP_Tracers,   function(v) Config.ESP_Tracers=v end)
+makeToggleRow(visPage, "Show Admin Roles",          Config.ESP_Roles,       function(v) Config.ESP_Roles=v end)
+makeToggleRow(visPage, "Full Skeleton (R15)",       Config.ESP_Skeleton,    function(v) Config.ESP_Skeleton=v end)
+makeToggleRow(visPage, "Head Circle",               Config.ESP_Head,        function(v) Config.ESP_Head=v end)
+makeToggleRow(visPage, "Show Level (Lv.X)",         Config.ESP_Level,       function(v) Config.ESP_Level=v end)
+makeToggleRow(visPage, "Show Rank Name",            Config.ESP_Rank,        function(v) Config.ESP_Rank=v end)
+makeToggleRow(visPage, "Real-time Firing Alert",    Config.ESP_FiringAlert, function(v) Config.ESP_FiringAlert=v end)
+makeToggleRow(visPage, "Status Alerts (Heal/Prot)", Config.ESP_Alerts,      function(v) Config.ESP_Alerts=v end)
+makeStepperRow(visPage,"Max ESP Distance",           Config.ESP_MaxDistance, 50, 1000, 50, function(v) Config.ESP_MaxDistance=v end)
+
+-- MOVE tab
+makeToggleRow(movePage,"Speed Boost",               Config.SpeedBoost,    function(v) Config.SpeedBoost=v end)
+makeStepperRow(movePage,"Boost Speed Value",        Config.SpeedValue, 16, 75, 2, function(v) Config.SpeedValue=v end)
+makeToggleRow(movePage,"Auto Sprint",               Config.AutoSprint,    function(v) Config.AutoSprint=v end)
+makeToggleRow(movePage,"Infinite Stamina",          Config.InfiniteStamina, function(v) Config.InfiniteStamina=v end)
+makeToggleRow(movePage,"Infinite Jump",             Config.InfiniteJump,  function(v) Config.InfiniteJump=v end)
+
+-- CONFIG tab
+makeButtonRow(cfgPage,"Unload Script","Destroy",function()
+    pcall(function() GStore.CLAN_RESPECT_CLEANUP() end)
+end)
+
+-- Mobile FAB
+local mobileFab=Instance.new("TextButton",ScreenGui)
+mobileFab.Name="CLAN_MobileToggle"; mobileFab.Size=UDim2.new(0,46,0,46)
+mobileFab.Position=UDim2.new(0,16,0.45,-23); mobileFab.BackgroundColor3=Color3.fromRGB(16,12,24)
+mobileFab.BackgroundTransparency=0.15; mobileFab.BorderSizePixel=0
+mobileFab.Text="CLAN"; mobileFab.TextColor3=Color3.fromRGB(245,190,35)
+mobileFab.Font=Enum.Font.GothamBold; mobileFab.TextSize=13; mobileFab.ZIndex=200
+Instance.new("UICorner",mobileFab).CornerRadius=UDim.new(0,23)
+local mfs=Instance.new("UIStroke",mobileFab); mfs.Color=Color3.fromRGB(214,160,30); mfs.Thickness=1.6
+mobileFab.MouseButton1Click:Connect(toggleMenu)
+
+-- Keyboard toggle
+regConn(UserInputService.InputBegan:Connect(function(inp, gpe)
+    if inp.UserInputType==Enum.UserInputType.Keyboard and inp.KeyCode==Config.MenuKey then
+        toggleMenu()
+    end
+end))
+
+-- ── Cleanup (idempotent: safe to call any number of times) ─────────
+GStore.CLAN_RESPECT_CLEANUP = function()
+    GStore.CLAN_SCRIPT_ID = nil
+    for _, conn in ipairs(State.Connections) do pcall(function() conn:Disconnect() end) end
+    State.Connections = {}
+    State.ESPCache = State.ESPCache or {}
+    for _, esp in pairs(State.ESPCache) do pcall(destroyESP, esp) end
+    State.ESPCache = {}
+    if FOVCircle then pcall(function() FOVCircle:Remove() end); FOVCircle=nil; GStore._CLAN_FOVCircle=nil end
+    if ESPGui then pcall(function() ESPGui:Destroy() end); ESPGui=nil; GStore._CLAN_ESPGui=nil end
+    if ScreenGui then pcall(function() ScreenGui:Destroy() end); ScreenGui=nil end
+    hardSweep()
+    pcall(function() ContextActionService:UnbindAction("TK4_CamSink") end)
+    pcall(function() ContextActionService:UnbindAction("TK4_CamSink_v2") end)
+    pcall(function() ContextActionService:UnbindAction("TK4_CamSink_old") end)
+    if GStore._TK4_MouseConn then
+        pcall(function() GStore._TK4_MouseConn:Disconnect() end)
+        GStore._TK4_MouseConn = nil
+    end
+    print("[CLAN V3] Cleaned up.")
+end
+
+print("[CLAN V3.1] Loaded! Sidebar UI + TK4 ESP engine active. Press [K] to toggle menu.")
